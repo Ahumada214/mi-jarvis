@@ -56,12 +56,7 @@ except ImportError:
 
 BLAND_API_KEY = os.getenv("BLAND_API_KEY") or os.getenv("BLAND_AI_API_KEY", "").strip()
 BLAND_API_URL = "https://api.bland.ai/v1/calls"
-GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
-ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
-JARVIS_SYSTEM_PROMPT = (
-    "Eres Jarvis, una IA integrada en NEXUS Spatial OS. "
-    "Responde de forma concisa y analítica."
-)
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip()
 
 app = FastAPI(title="Jarvis NEXUS Core", version="1.0.0")
 
@@ -197,88 +192,30 @@ def _prompt_analisis(tema: str) -> str:
     )
 
 
-def _llamar_groq(prompt: str) -> str:
-    if not GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY no está configurada.")
-    resp = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "llama3-8b-8192",
-            "messages": [
-                {"role": "system", "content": JARVIS_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.5,
-        },
-        timeout=90,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(resp.text or f"HTTP {resp.status_code}")
-    texto = (resp.json()["choices"][0]["message"]["content"] or "").strip()
-    if not texto:
-        raise RuntimeError("Groq devolvió una respuesta vacía.")
-    print("[LLM] Respuesta generada con Groq (llama3-8b-8192)")
-    return texto
-
-
-def _llamar_anthropic(prompt: str) -> str:
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY no está configurada.")
-    resp = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": "claude-3-5-sonnet-20241022",
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": prompt}],
-        },
-        timeout=90,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(resp.text or f"HTTP {resp.status_code}")
-    partes = resp.json().get("content") or []
-    texto = "".join(p.get("text", "") for p in partes if isinstance(p, dict)).strip()
-    if not texto:
-        raise RuntimeError("Anthropic devolvió una respuesta vacía.")
-    print("[LLM] Respuesta generada con Anthropic")
-    return texto
-
-
-def llamar_llm(prompt: str) -> str:
-    """Usa Groq (GROQ_API_KEY) o Anthropic (ANTHROPIC_API_KEY), las keys de Render."""
-    errores = []
-    if GROQ_API_KEY:
-        try:
-            return _llamar_groq(prompt)
-        except Exception as e:
-            errores.append(f"Groq: {e}")
-            print(f"[LLM GROQ] {e}")
-    if ANTHROPIC_API_KEY:
-        try:
-            return _llamar_anthropic(prompt)
-        except Exception as e:
-            errores.append(f"Anthropic: {e}")
-            print(f"[LLM ANTHROPIC] {e}")
-    detalle = " | ".join(errores) if errores else "Faltan GROQ_API_KEY y ANTHROPIC_API_KEY."
-    raise RuntimeError(f"No se pudo generar texto con el LLM. {detalle}")
+def call_llm(prompt: str) -> str:
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return "Error: GEMINI_API_KEY no configurada en Render."
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=25)
+        data = res.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        return f"Error en Gemini API: {str(e)}"
 
 
 def generar_analisis_llm(tema: str) -> str:
-    """Genera un análisis enriquecido con Groq o Anthropic. Nunca devuelve el prompt crudo."""
-    return llamar_llm(_prompt_analisis(tema))
+    """Genera un análisis enriquecido con Gemini. Nunca devuelve el prompt crudo."""
+    return call_llm(_prompt_analisis(tema))
 
 
 def responder_chat_llm(prompt: str) -> str:
-    """Respuesta de conversación con el mismo LLM de Render."""
-    return llamar_llm(prompt)
+    """Respuesta de conversación con Gemini."""
+    return call_llm(prompt)
 
 
 
@@ -443,19 +380,17 @@ def health_check():
         "system": "Jarvis Core",
         "spotify_auth_ready": bool(os.getenv("SPOTIFY_REFRESH_TOKEN")),
         "bland_ready": bool(BLAND_API_KEY),
-        "llm_ready": bool(GROQ_API_KEY or ANTHROPIC_API_KEY),
+        "llm_ready": bool(os.getenv("GEMINI_API_KEY", "").strip()),
     }
 
 
 @app.post("/generate-notes", response_model=GenerateNotesResponse)
 def generate_notes(request: GenerateNotesRequest):
     tema = f"{request.title}. {request.content}".strip()
-    try:
-        analisis = generar_analisis_llm(tema)
-        markdown_text = generar_markdown_reporte(request.title, analisis)
-    except Exception as e:
-        print(f"[LLM] {e}")
-        raise HTTPException(status_code=502, detail=str(e))
+    analisis = call_llm(_prompt_analisis(tema))
+    if analisis.startswith("Error"):
+        raise HTTPException(status_code=502, detail=analisis)
+    markdown_text = generar_markdown_reporte(request.title, analisis)
     filename = nombre_archivo_nota(request.title)
     try:
         save_to_obsidian(request.title, analisis, tags=["reporte", "nexus"])
@@ -487,12 +422,10 @@ async def ask_jarvis(request: AskRequest):
         titulo = extraer_titulo_reporte(prompt) if es_comando_reporte(prompt) else "Nota Jarvis"
         if es_comando_nota(prompt) and prompt.lower().startswith("nota:"):
             titulo = "Nota Jarvis"
-        try:
-            analisis = generar_analisis_llm(prompt)
-            markdown_text = generar_markdown_reporte(titulo, analisis)
-        except Exception as e:
-            print(f"[LLM] {e}")
-            return AskResponse(response=str(e), status="error", intent="report", success=False)
+        analisis = call_llm(_prompt_analisis(prompt))
+        if analisis.startswith("Error"):
+            return AskResponse(response=analisis, status="error", intent="report", success=False)
+        markdown_text = generar_markdown_reporte(titulo, analisis)
         try:
             save_to_obsidian(titulo, analisis, tags=["reporte", "nexus"])
         except Exception as e:
@@ -516,11 +449,9 @@ async def ask_jarvis(request: AskRequest):
         playback_result = play_song(song_query)
         return AskResponse(response=playback_result, status="ok", intent="music")
 
-    try:
-        respuesta = responder_chat_llm(prompt)
-    except Exception as e:
-        print(f"[LLM CHAT] {e}")
-        return AskResponse(response=str(e), status="error", intent="chat")
+    respuesta = call_llm(prompt)
+    if respuesta.startswith("Error"):
+        return AskResponse(response=respuesta, status="error", intent="chat")
     return AskResponse(response=respuesta, status="ok", intent="chat")
 
 
