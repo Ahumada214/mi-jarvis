@@ -11,3 +11,5 @@ tavily-python
 edge-tts
 pydantic
 httpx
+google-auth
+google-api-python-client
