@@ -1,0 +1,15 @@
+groq
+anthropic
+python-telegram-bot
+edge-tts
+google-api-python-client
+google-auth
+google-auth-httplib2
+tavily-python
+httpx
+yt-dlp
+PyGithub
+fastapi
+uvicorn
+pydantic
+spotipy
