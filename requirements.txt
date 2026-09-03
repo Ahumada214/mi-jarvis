@@ -8,3 +8,6 @@ python-telegram-bot
 PyGithub
 groq
 tavily-python
+edge-tts
+pydantic
+httpx
