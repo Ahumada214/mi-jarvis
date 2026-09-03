@@ -58,7 +58,6 @@ BLAND_API_KEY = os.getenv("BLAND_API_KEY") or os.getenv("BLAND_AI_API_KEY", "").
 BLAND_API_URL = "https://api.bland.ai/v1/calls"
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
-GROQ_MODELOS = ("llama-3.3-70b-versatile", "mixtral-8x7b-32768")
 JARVIS_SYSTEM_PROMPT = (
     "Eres Jarvis, una IA integrada en NEXUS Spatial OS. "
     "Responde de forma analítica, profesional y estructurada."
@@ -201,38 +200,29 @@ def _prompt_analisis(tema: str) -> str:
 def _llamar_groq(prompt: str) -> str:
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY no está configurada.")
-    ultimo_error = None
-    payload_messages = [
-        {"role": "system", "content": JARVIS_SYSTEM_PROMPT},
-        {"role": "user", "content": prompt},
-    ]
-    for modelo in GROQ_MODELOS:
-        try:
-            resp = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": modelo,
-                    "messages": payload_messages,
-                    "temperature": 0.5,
-                },
-                timeout=90,
-            )
-            if resp.status_code != 200:
-                ultimo_error = resp.text or f"HTTP {resp.status_code}"
-                print(f"[LLM GROQ] {modelo}: {ultimo_error}")
-                continue
-            texto = (resp.json()["choices"][0]["message"]["content"] or "").strip()
-            if texto:
-                print(f"[LLM] Respuesta generada con Groq ({modelo})")
-                return texto
-        except Exception as e:
-            ultimo_error = str(e)
-            print(f"[LLM GROQ] {modelo}: {e}")
-    raise RuntimeError(f"Groq no devolvió texto. {ultimo_error or ''}".strip())
+    resp = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": JARVIS_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.5,
+        },
+        timeout=90,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(resp.text or f"HTTP {resp.status_code}")
+    texto = (resp.json()["choices"][0]["message"]["content"] or "").strip()
+    if not texto:
+        raise RuntimeError("Groq devolvió una respuesta vacía.")
+    print("[LLM] Respuesta generada con Groq (llama-3.3-70b-versatile)")
+    return texto
 
 
 def _llamar_anthropic(prompt: str) -> str:
