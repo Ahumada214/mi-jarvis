@@ -193,6 +193,50 @@ def buscar_en_internet(query):
     except Exception as e:
         return f"Error en búsqueda: {e}"
 
+
+PALABRAS_REPORTE_LARGO = (
+    "reporte", "análisis profundo", "analisis profundo", "tabla", "documento",
+    "ensayo", "investigación", "investigacion", "análisis financiero",
+    "analisis financiero",
+)
+
+
+def pide_documento_largo(prompt: str) -> bool:
+    texto = (prompt or "").lower()
+    return any(p in texto for p in PALABRAS_REPORTE_LARGO)
+
+
+def sintetizar_respuesta_breve(pregunta: str, contexto: str = "") -> str:
+    """Convierte datos crudos en 2-3 renglones conversacionales."""
+    instrucciones = (
+        "Eres Jarvis. Responde en MÁXIMO 2 o 3 renglones, conversacional, claro y al grano.\n"
+        "Prohibido pegar tablas, calendarios de toda la temporada, listados largos o textos de compra de entradas.\n"
+        'Ejemplo: "El próximo partido del Real Madrid es el sábado 6 a las 13:00 contra el Barcelona."\n\n'
+        f"Pregunta: {pregunta}\n"
+    )
+    if contexto:
+        instrucciones += f"\nDatos de apoyo (usa solo lo indispensable):\n{contexto[:1800]}\n"
+    try:
+        if claude_client:
+            res = claude_client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=180,
+                messages=[{"role": "user", "content": instrucciones}],
+            )
+            return (res.content[0].text or "").strip()
+        if groq_client:
+            modelo = obtener_modelo_groq()
+            res = groq_client.chat.completions.create(
+                model=modelo,
+                messages=[{"role": "user", "content": instrucciones}],
+                max_tokens=180,
+                temperature=0.2,
+            )
+            return (res.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[SINTESIS BREVE] {e}")
+    return contexto.split("\n")[0][:280] if contexto else "No pude obtener una respuesta breve."
+
 def crear_evento_calendario(titulo, fecha_inicio_iso, fecha_fin_iso):
     calendar_service = get_calendar_service()
     if not calendar_service:
@@ -296,8 +340,16 @@ def procesar_con_ia(prompt_usuario, chat_id=None, channel="telegram"):
     ahora_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     system_prompt = f"""Eres Jarvis, asistente de alto rendimiento. Fecha actual: {ahora_str}.
 
-Si el usuario solicita una investigación, ensayo, tarea, reporte, análisis financiero o de mercado:
-- Acción obligatoria: "crear_doc"
+Estilo de respuesta:
+- Preguntas rápidas, cotidianas o directas (partido, hora, clima, resultado, un dato):
+  usa "buscar_web" o "conversar". En "respuesta_voz" escribe SOLO la respuesta final:
+  máximo 2 o 3 renglones, conversacional y al grano.
+  Ejemplo: "El próximo partido del Real Madrid es el sábado 6 a las 13:00 contra el Barcelona."
+- NUNCA elijas "crear_doc" ni pidas tablas, calendarios de temporada ni textos de boletos
+  a menos que el usuario diga explícitamente: "reporte", "análisis profundo", "tabla" o "documento".
+
+Si el usuario pide explícitamente investigación, ensayo, reporte, análisis profundo, tabla o documento:
+- Acción: "crear_doc"
 - En "doc_titulo": Título técnico y claro (ej. "Analisis_NVIDIA_Valuacion")
 - En "doc_tema": Tema exacto que solicitó
 
@@ -357,6 +409,10 @@ Formato JSON obligatorio:
         params = data.get("parametros", {})
         resp_voz = data.get("respuesta_voz", "Entendido.")
 
+        if accion == "crear_doc" and not pide_documento_largo(prompt_usuario):
+            accion = "buscar_web"
+            params["busqueda_query"] = params.get("busqueda_query") or params.get("doc_tema") or prompt_usuario
+
         if accion == "crear_doc":
             titulo = params.get("doc_titulo") or "Analisis_Investigacion"
             tema = params.get("doc_tema") or prompt_usuario
@@ -387,8 +443,9 @@ Formato JSON obligatorio:
             return {"texto": msg, "markdown": msg}
 
         elif accion == "buscar_web" and params.get("busqueda_query"):
-            res = buscar_en_internet(params.get("busqueda_query"))
-            return {"texto": res, "markdown": f"### Resultados Web\n{res}"}
+            crudo = buscar_en_internet(params.get("busqueda_query"))
+            breve = sintetizar_respuesta_breve(prompt_usuario, crudo)
+            return {"texto": breve, "markdown": breve}
 
         elif accion == "crear_evento" and params.get("evento_titulo"):
             res = crear_evento_calendario(params.get("evento_titulo"), params.get("evento_inicio"), params.get("evento_fin"))
@@ -399,7 +456,10 @@ Formato JSON obligatorio:
             return {"texto": res, "markdown": f"### Agenda Personal\n{res}"}
 
         else:
-            return {"texto": resp_voz, "markdown": resp_voz}
+            if pide_documento_largo(prompt_usuario):
+                return {"texto": resp_voz, "markdown": resp_voz}
+            breve = sintetizar_respuesta_breve(prompt_usuario, resp_voz)
+            return {"texto": breve, "markdown": breve}
 
     except Exception as e:
         error_msg = f"Error en procesamiento: {e}"
