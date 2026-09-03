@@ -109,6 +109,9 @@ REPORT_TRIGGERS = (
     "análisis",
     "analisis",
     "analiza",
+    "generate notes",
+    "genera notas",
+    "generar notas",
 )
 
 
@@ -213,14 +216,45 @@ def nombre_archivo_nota(title: str) -> str:
 def call_gemini(prompt: str) -> str:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
-        return "Error: GEMINI_API_KEY no configurada en Render."
+        return "Error: GEMINI_API_KEY no configurada en las variables de entorno."
+
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
     try:
-        r = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30)
-        data = r.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        res = requests.post(url, headers=headers, json=payload, timeout=30)
+        data = res.json()
+        if "candidates" in data and len(data["candidates"]) > 0:
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        elif "error" in data:
+            return f"Error API Gemini ({data['error'].get('code')}): {data['error'].get('message')}"
+        else:
+            return f"Respuesta inesperada de Gemini: {res.text}"
     except Exception as e:
-        return f"Error al consultar Gemini: {str(e)}"
+        return f"Error de conexión con Gemini: {str(e)}"
+
+
+def sincronizar_obsidian(title: str, markdown_text: str, tags=None) -> bool:
+    """Sube el Markdown generado por Gemini al repo de Obsidian (GitHub)."""
+    token = (os.getenv("GITHUB_TOKEN") or "").strip()
+    repo = (os.getenv("GITHUB_REPO") or "").strip()
+    if not token or not repo:
+        print("[OBSIDIAN] Faltan GITHUB_TOKEN o GITHUB_REPO. No se hace commit.")
+        return False
+    try:
+        ok = save_to_obsidian(title, markdown_text, tags=tags or ["reporte", "nexus", "gemini"])
+        if ok:
+            print(f"[OBSIDIAN] Commit listo: {title}")
+        else:
+            print(f"[OBSIDIAN] save_to_obsidian devolvió False para '{title}'")
+        return ok
+    except Exception as e:
+        print(f"[OBSIDIAN ERROR] {e}")
+        return False
 
 
 def trigger_bland_call(phone_number: str, message_task: str):
@@ -304,10 +338,7 @@ def procesar_comando(prompt: str) -> dict:
         if analisis.startswith("Error"):
             return {"response": analisis, "status": "error", "intent": "report", "success": False}
         markdown_text = generar_markdown_reporte(titulo, analisis)
-        try:
-            save_to_obsidian(titulo, analisis, tags=["reporte", "nexus"])
-        except Exception as e:
-            print(f"[OBSIDIAN] No se pudo sincronizar el reporte: {e}")
+        sincronizar_obsidian(titulo, markdown_text, tags=["reporte", "nexus", "gemini"])
         return {
             "response": markdown_text,
             "status": "ok",
@@ -367,8 +398,12 @@ def _telegram_poll_loop() -> None:
                 text = (message.get("text") or "").strip()
                 if not chat_id or not text:
                     continue
-                resultado = procesar_comando(text)
-                _enviar_telegram(chat_id, resultado.get("response") or "Sin respuesta.")
+                try:
+                    resultado = procesar_comando(text)
+                    _enviar_telegram(chat_id, resultado.get("response") or "Sin respuesta.")
+                except Exception as inner:
+                    print(f"[TELEGRAM POLL CMD] {inner}")
+                    _enviar_telegram(chat_id, f"Error al procesar el comando: {inner}")
         except Exception as e:
             print(f"[TELEGRAM POLL] {e}")
             time.sleep(3)
@@ -399,10 +434,7 @@ def generate_notes(request: GenerateNotesRequest):
         raise HTTPException(status_code=502, detail=analisis)
     markdown_text = generar_markdown_reporte(request.title, analisis)
     filename = nombre_archivo_nota(request.title)
-    try:
-        save_to_obsidian(request.title, analisis, tags=["reporte", "nexus"])
-    except Exception as e:
-        print(f"[OBSIDIAN] No se pudo sincronizar la nota: {e}")
+    sincronizar_obsidian(request.title, markdown_text, tags=["reporte", "nexus", "gemini"])
     return GenerateNotesResponse(success=True, markdown=markdown_text, filename=filename)
 
 
@@ -422,8 +454,12 @@ async def telegram_webhook(request: Request):
         chat_id = (message.get("chat") or {}).get("id")
         text = (message.get("text") or "").strip()
         if chat_id and text:
-            resultado = procesar_comando(text)
-            _enviar_telegram(chat_id, resultado.get("response") or "Sin respuesta.")
+            try:
+                resultado = procesar_comando(text)
+                _enviar_telegram(chat_id, resultado.get("response") or "Sin respuesta.")
+            except Exception as inner:
+                print(f"[TELEGRAM WEBHOOK CMD] {inner}")
+                _enviar_telegram(chat_id, f"Error al procesar el comando: {inner}")
     except Exception as e:
         print(f"[TELEGRAM WEBHOOK] {e}")
     return {"ok": True}
