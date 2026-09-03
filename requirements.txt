@@ -7,6 +7,7 @@ google-auth
 google-auth-httplib2
 tavily-python
 httpx
+requests
 yt-dlp
 PyGithub
 fastapi
