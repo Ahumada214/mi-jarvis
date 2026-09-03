@@ -11,9 +11,9 @@ except ImportError:
     Github = None
     GithubException = Exception
 
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
-GITHUB_REPO = os.environ.get("GITHUB_REPO", "").strip()
-OBSIDIAN_FOLDER = os.environ.get("OBSIDIAN_FOLDER", "Jarvis_Notes").strip() or "Jarvis_Notes"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
+OBSIDIAN_FOLDER = os.getenv("OBSIDIAN_FOLDER", "Jarvis").strip().strip("/")
 
 
 def sanitizar_titulo(title: str) -> str:
@@ -64,9 +64,9 @@ def save_to_obsidian(title: str, content: str, tags: Optional[List[str]] = None)
             print("[OBSIDIAN] PyGithub no está instalado. Se omite la sincronización.")
             return False
 
-        token = (os.getenv("GITHUB_TOKEN") or GITHUB_TOKEN or "").strip()
-        repo_name = (os.getenv("GITHUB_REPO") or GITHUB_REPO or "").strip()
-        folder = (os.getenv("OBSIDIAN_FOLDER") or OBSIDIAN_FOLDER or "Jarvis_Notes").strip() or "Jarvis_Notes"
+        token = os.getenv("GITHUB_TOKEN", "").strip()
+        repo_name = os.getenv("GITHUB_REPO", "").strip()
+        folder = os.getenv("OBSIDIAN_FOLDER", "Jarvis").strip().strip("/") or "Jarvis"
         if not token or not repo_name:
             print("[OBSIDIAN] Faltan GITHUB_TOKEN o GITHUB_REPO. Se omite la sincronización.")
             return False
