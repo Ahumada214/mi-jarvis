@@ -1,4 +1,4 @@
-"""Reproducción de música en Spotify vía Spotipy (OAuth de usuario)."""
+"""Reproducción de música en Spotify vía Spotipy (OAuth de usuario / Headless Refresh Token)."""
 
 import os
 from typing import Optional
@@ -15,7 +15,76 @@ except ImportError:
 SPOTIFY_SCOPE = "user-modify-playback-state user-read-playback-state"
 SPOTIPY_CLIENT_ID = os.environ.get("SPOTIPY_CLIENT_ID", "").strip()
 SPOTIPY_CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "").strip()
-SPOTIPY_REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "").strip()
+SPOTIPY_REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8080").strip()
+SPOTIFY_REFRESH_TOKEN = os.environ.get("SPOTIFY_REFRESH_TOKEN", "").strip()
+
+
+def get_spotify_client() -> Optional["spotipy.Spotify"]:
+    """Obtiene un cliente de Spotipy autenticado mediante el refresh token configurado."""
+    if not spotipy or not SpotifyOAuth:
+        return None
+
+    if not SPOTIPY_CLIENT_ID or not SPOTIPY_CLIENT_SECRET:
+        return None
+
+    auth_manager = SpotifyOAuth(
+        client_id=SPOTIPY_CLIENT_ID,
+        client_secret=SPOTIPY_CLIENT_SECRET,
+        redirect_uri=SPOTIPY_REDIRECT_URI,
+        scope=SPOTIFY_SCOPE,
+        open_browser=False,
+    )
+
+    if SPOTIFY_REFRESH_TOKEN:
+        try:
+            token_info = auth_manager.refresh_access_token(SPOTIFY_REFRESH_TOKEN)
+            return spotipy.Spotify(auth=token_info["access_token"])
+        except Exception as e:
+            print(f"[Spotify] Error al renovar access token con refresh token: {e}")
+            return None
+
+    return None
+
+
+def play_song(query: str) -> str:
+    """Busca una pista y la reproduce en el dispositivo activo de Spotify."""
+    sp = get_spotify_client()
+    if not sp:
+        return "Configuración de Spotify incompleta o error al renovar el token en el servidor."
+
+    try:
+        # 1. Buscar la pista
+        results = sp.search(q=query, limit=1, type="track")
+        tracks = results.get("tracks", {}).get("items", [])
+        if not tracks:
+            return f"No encontré la canción '{query}' en Spotify."
+
+        track = tracks[0]
+        track_uri = track["uri"]
+        track_name = track["name"]
+        artist_name = track["artists"][0]["name"] if track["artists"] else "Desconocido"
+
+        # 2. Obtener dispositivo activo o primer dispositivo disponible
+        devices_data = sp.devices()
+        devices = devices_data.get("devices", [])
+        if not devices:
+            return f"Encontré '{track_name}' de {artist_name}, pero no hay dispositivos de Spotify abiertos. Abre Spotify en tu PC."
+
+        active_device = next((d for d in devices if d.get("is_active")), None)
+        target_device_id = active_device["id"] if active_device else devices[0]["id"]
+
+        # 3. Lanzar reproducción
+        sp.start_playback(device_id=target_device_id, uris=[track_uri])
+        return f"Reproduciendo {track_name} de {artist_name} en Spotify."
+
+    except SpotifyException as se:
+        if "NO_ACTIVE_DEVICE" in str(se):
+            return "Abre Spotify en tu PC y dale reproducir a cualquier canción para activar la sesión."
+        if "PREMIUM_REQUIRED" in str(se):
+            return "El control remoto de reproducción requiere una cuenta de Spotify Premium."
+        return f"Error en API de Spotify: {str(se)}"
+    except Exception as e:
+        return f"Error al reproducir en Spotify: {str(e)}"
 SPOTIFY_CACHE_PATH = os.environ.get("SPOTIFY_CACHE_PATH", ".spotify_token_cache").strip() or ".spotify_token_cache"
 
 _sp_client = None
