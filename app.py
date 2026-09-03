@@ -54,8 +54,16 @@ except ImportError:
         return f"+{digitos}"
 
 
-BLAND_API_KEY = os.getenv("BLAND_API_KEY")
+BLAND_API_KEY = os.getenv("BLAND_API_KEY") or os.getenv("BLAND_AI_API_KEY", "").strip()
 BLAND_API_URL = "https://api.bland.ai/v1/calls"
+GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
+ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELOS = (
+    os.getenv("GROQ_MODEL", "").strip() or "llama-3.3-70b-versatile",
+    "llama3-70b-8192",
+    "llama-3.1-8b-instant",
+)
 
 app = FastAPI(title="Jarvis NEXUS Core", version="1.0.0")
 
@@ -83,6 +91,7 @@ class AskResponse(BaseModel):
     intent: Optional[str] = "chat"
     markdown: Optional[str] = None
     success: Optional[bool] = None
+    call_id: Optional[str] = None
 
 
 class GenerateNotesRequest(BaseModel):
@@ -122,6 +131,13 @@ REPORT_TRIGGERS = (
     "haz un reporte",
     "genera el reporte",
     "crea el reporte",
+    "análisis",
+    "analisis",
+    "analiza",
+    "analizar",
+    "genera notas",
+    "generar notas",
+    "genera una nota",
 )
 
 
@@ -147,9 +163,12 @@ def es_comando_musica(text: str) -> bool:
     return any(trigger in lower for trigger in MUSIC_TRIGGERS)
 
 
+CALL_TRIGGERS = ("haz una llamada", "llama a", "llama al", "marcar a", "marcar al", "marca al", "marca a")
+
+
 def es_comando_llamada(text: str) -> bool:
     lower = (text or "").lower()
-    return "llama a" in lower or "marcar a" in lower or "marca a" in lower or "llama al" in lower or "marcar al" in lower
+    return any(trigger in lower for trigger in CALL_TRIGGERS)
 
 
 def es_comando_reporte(text: str) -> bool:
@@ -167,22 +186,172 @@ def es_comando_nota(text: str) -> bool:
     )
 
 
+def _prompt_analisis(tema: str) -> str:
+    return (
+        "Eres un analista e investigador sénior. Redacta un análisis completo, "
+        f"técnico y detallado sobre: {tema}\n\n"
+        "Estructura obligatoria en Markdown (sin frontmatter):\n"
+        "## Resumen\n"
+        "Resumen ejecutivo de 3 a 6 oraciones con la tesis principal.\n\n"
+        "## Contenido\n"
+        "Análisis profundo con subtítulos, contexto, datos, riesgos y conclusiones. "
+        "Escribe en español, con formato Markdown limpio."
+    )
+
+
+def _llamar_groq(messages: list, max_tokens: int = 4000) -> str:
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY no está configurada.")
+    ultimo_error = None
+    for modelo in GROQ_MODELOS:
+        if not modelo:
+            continue
+        try:
+            resp = requests.post(
+                GROQ_CHAT_URL,
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": modelo,
+                    "messages": messages,
+                    "temperature": 0.3,
+                    "max_tokens": max_tokens,
+                },
+                timeout=90,
+            )
+            if resp.status_code != 200:
+                ultimo_error = resp.text or f"HTTP {resp.status_code}"
+                print(f"[LLM GROQ] {modelo}: {ultimo_error}")
+                continue
+            texto = (resp.json()["choices"][0]["message"]["content"] or "").strip()
+            if texto:
+                print(f"[LLM] Respuesta generada con Groq ({modelo})")
+                return texto
+        except Exception as e:
+            ultimo_error = str(e)
+            print(f"[LLM GROQ] {modelo}: {e}")
+    raise RuntimeError(f"Groq no devolvió texto. {ultimo_error or ''}".strip())
+
+
+def _llamar_anthropic(messages: list, max_tokens: int = 4000) -> str:
+    if not ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY no está configurada.")
+    system = ""
+    user_messages = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            system = msg.get("content") or ""
+        else:
+            user_messages.append({"role": msg["role"], "content": msg["content"]})
+    if not user_messages:
+        user_messages = [{"role": "user", "content": system or "Hola"}]
+    resp = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
+            "max_tokens": max_tokens,
+            "system": system or "Eres Jarvis, un asistente de alto rendimiento.",
+            "messages": user_messages,
+        },
+        timeout=90,
+    )
+    resp.raise_for_status()
+    partes = resp.json().get("content") or []
+    texto = "".join(p.get("text", "") for p in partes if isinstance(p, dict)).strip()
+    if not texto:
+        raise RuntimeError("Anthropic devolvió una respuesta vacía.")
+    print("[LLM] Respuesta generada con Anthropic")
+    return texto
+
+
+def llamar_llm(messages: list, max_tokens: int = 4000) -> str:
+    """Usa Groq (GROQ_API_KEY) o Anthropic (ANTHROPIC_API_KEY), las keys de Render."""
+    errores = []
+    if GROQ_API_KEY:
+        try:
+            return _llamar_groq(messages, max_tokens=max_tokens)
+        except Exception as e:
+            errores.append(f"Groq: {e}")
+            print(f"[LLM GROQ] {e}")
+    if ANTHROPIC_API_KEY:
+        try:
+            return _llamar_anthropic(messages, max_tokens=max_tokens)
+        except Exception as e:
+            errores.append(f"Anthropic: {e}")
+            print(f"[LLM ANTHROPIC] {e}")
+    detalle = " | ".join(errores) if errores else "Faltan GROQ_API_KEY y ANTHROPIC_API_KEY."
+    raise RuntimeError(f"No se pudo generar texto con el LLM. {detalle}")
+
+
+def generar_analisis_llm(tema: str) -> str:
+    """Genera un análisis enriquecido con Groq o Anthropic. Nunca devuelve el prompt crudo."""
+    return llamar_llm(
+        [
+            {"role": "system", "content": "Eres un analista sénior. Responde solo en Markdown."},
+            {"role": "user", "content": _prompt_analisis(tema)},
+        ],
+        max_tokens=4000,
+    )
+
+
+def responder_chat_llm(prompt: str) -> str:
+    """Respuesta de conversación con el mismo LLM de Render."""
+    return llamar_llm(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "Eres Jarvis, asistente de alto rendimiento. "
+                    "Responde en español, con claridad y utilidad."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=1500,
+    )
+
+
+def extraer_secciones_analisis(texto: str) -> tuple:
+    """Separa ## Resumen y ## Contenido del texto del LLM."""
+    limpio = (texto or "").strip()
+    resumen_m = re.search(r"##\s*Resumen\s*\n+(.*?)(?=\n##\s|\Z)", limpio, re.IGNORECASE | re.DOTALL)
+    contenido_m = re.search(r"##\s*Contenido\s*\n+(.*)\Z", limpio, re.IGNORECASE | re.DOTALL)
+    if resumen_m:
+        resumen = resumen_m.group(1).strip()
+        contenido = contenido_m.group(1).strip() if contenido_m else re.sub(
+            r"##\s*Resumen\s*\n+.*?(?=\n##\s|\Z)", "", limpio, flags=re.IGNORECASE | re.DOTALL
+        ).strip()
+        return resumen, contenido or limpio
+    parrafos = [p.strip() for p in re.split(r"\n\s*\n", limpio) if p.strip()]
+    if not parrafos:
+        return limpio, limpio
+    return parrafos[0], limpio
+
+
 def extraer_titulo_reporte(prompt: str) -> str:
     limpio = re.sub(
-        r"(?i)^(genera|generar|crea|crear|haz|redacta)\s+(un\s+|el\s+)?reporte\s+"
+        r"(?i)^(genera|generar|crea|crear|haz|redacta)\s+(un\s+|el\s+|una\s+)?"
+        r"(reporte|análisis|analisis|nota|notas)\s+"
         r"(sobre|de|del|acerca de)?\s*",
         "",
         prompt or "",
     ).strip(" .")
+    limpio = re.sub(r"(?i)^(analiza|analizar)\s+", "", limpio).strip(" .")
     return (limpio[:80] or "Reporte Jarvis")
 
 
 def generar_markdown_reporte(title: str, content: str) -> str:
-    """Markdown limpio con metadatos para descarga en el frontend."""
+    """Arma el .md con el texto enriquecido del LLM en Resumen y Contenido."""
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M")
     titulo = (title or "Reporte Jarvis").strip() or "Reporte Jarvis"
-    cuerpo = (content or "").strip() or "Sin contenido."
-    resumen = re.sub(r"\s+", " ", cuerpo).strip()[:280]
+    resumen, cuerpo = extraer_secciones_analisis(content)
     titulo_yaml = titulo.replace('"', '\\"')
     return (
         "---\n"
@@ -202,22 +371,21 @@ def generar_markdown_reporte(title: str, content: str) -> str:
     )
 
 
+def construir_reporte_llm(title: str, tema: str) -> str:
+    """Pide el análisis al LLM y lo formatea. No usa el prompt crudo como cuerpo."""
+    analisis = generar_analisis_llm(tema)
+    return generar_markdown_reporte(title, analisis)
+
+
 def extraer_telefono_e164(texto: str) -> Optional[str]:
-    """Extrae un teléfono y lo normaliza a E.164, anteponiendo +52 si falta el código."""
-    match = re.search(r"(\+?\d[\d\s\-().]{7,18}\d)", texto or "")
+    """Extrae un teléfono con el regex E.164 pedido y antepone +52 si falta '+'."""
+    match = re.search(r"(\+?\d[\d\s\-]{8,15}\d)", texto or "")
     if not match:
         return None
     raw = match.group(1).strip()
-    digitos = re.sub(r"\D", "", raw)
-    if not digitos:
-        return None
     if raw.startswith("+"):
-        return f"+{digitos}"
-    if digitos.startswith("52") and len(digitos) >= 12:
-        return f"+{digitos}"
-    if len(digitos) == 10:
-        return f"+52{digitos}"
-    return f"+{digitos}"
+        return "+" + re.sub(r"\D", "", raw)
+    return "+52" + re.sub(r"\D", "", raw)
 
 
 def nombre_archivo_nota(title: str) -> str:
@@ -226,48 +394,52 @@ def nombre_archivo_nota(title: str) -> str:
     return f"{limpio[:80]}.md"
 
 
-def trigger_bland_call(phone_number: str, message_task: str) -> str:
-    """Dispara una llamada Bland AI y retorna el estado o el error de la API."""
-    api_key = os.getenv("BLAND_API_KEY") or ""
+def trigger_bland_call(phone_number: str, message_task: str):
+    """Dispara una llamada Bland AI. Retorna (mensaje, call_id)."""
+    api_key = BLAND_API_KEY or os.getenv("BLAND_API_KEY") or os.getenv("BLAND_AI_API_KEY", "").strip()
     if not api_key:
-        return "Falta BLAND_API_KEY en las variables de entorno."
+        return "Falta BLAND_API_KEY o BLAND_AI_API_KEY en las variables de entorno.", None
     if not phone_number:
-        return "No pude identificar un número telefónico válido."
+        return "No pude identificar un número telefónico válido.", None
 
     try:
         resp = requests.post(
             "https://api.bland.ai/v1/calls",
-            headers={"authorization": api_key, "Content-Type": "application/json"},
+            headers={"authorization": api_key},
             json={"phone_number": phone_number, "task": message_task},
             timeout=20,
         )
+        try:
+            data = resp.json()
+        except Exception:
+            data = {}
         if resp.status_code != 200:
-            try:
-                data = resp.json()
-            except Exception:
-                return (resp.text or f"HTTP {resp.status_code}").strip()
             if isinstance(data, dict):
                 if data.get("errors"):
                     errors = data["errors"]
                     if isinstance(errors, list):
-                        return " ".join(str(item) for item in errors)
-                    return str(errors)
+                        return " ".join(str(item) for item in errors), None
+                    return str(errors), None
                 for key in ("message", "error", "msg"):
                     if data.get(key):
-                        return str(data[key])
-                return str(data)
-            return str(data)
-        return f"Llamada iniciada hacia {phone_number}."
+                        return str(data[key]), None
+                return str(data), None
+            return (resp.text or f"HTTP {resp.status_code}").strip(), None
+        call_id = data.get("call_id") if isinstance(data, dict) else None
+        confirmacion = f"Llamada iniciada hacia {phone_number}."
+        if call_id:
+            confirmacion = f"{confirmacion} call_id: {call_id}"
+        return confirmacion, call_id
     except Exception as e:
         print(f"[BLAND ERROR] {e}")
-        return f"Error al contactar Bland AI: {e}"
+        return f"Error al contactar Bland AI: {e}", None
 
 
 def make_call(phone_number: str, task: str) -> str:
     """Inicia una llamada en Bland AI y devuelve el estado o el error exacto."""
-    api_key = os.getenv("BLAND_API_KEY") or ""
+    api_key = BLAND_API_KEY or os.getenv("BLAND_API_KEY") or os.getenv("BLAND_AI_API_KEY", "").strip()
     if not api_key:
-        return "Falta BLAND_API_KEY en las variables de entorno."
+        return "Falta BLAND_API_KEY o BLAND_AI_API_KEY en las variables de entorno."
 
     phone_number = normalizar_telefono(phone_number)
     if not phone_number:
@@ -306,16 +478,23 @@ def health_check():
         "status": "online",
         "system": "Jarvis Core",
         "spotify_auth_ready": bool(os.getenv("SPOTIFY_REFRESH_TOKEN")),
-        "bland_ready": bool(os.getenv("BLAND_API_KEY")),
+        "bland_ready": bool(BLAND_API_KEY),
+        "llm_ready": bool(GROQ_API_KEY or ANTHROPIC_API_KEY),
     }
 
 
 @app.post("/generate-notes", response_model=GenerateNotesResponse)
 def generate_notes(request: GenerateNotesRequest):
-    markdown_text = generar_markdown_reporte(request.title, request.content)
+    tema = f"{request.title}. {request.content}".strip()
+    try:
+        analisis = generar_analisis_llm(tema)
+        markdown_text = generar_markdown_reporte(request.title, analisis)
+    except Exception as e:
+        print(f"[LLM] {e}")
+        raise HTTPException(status_code=502, detail=str(e))
     filename = nombre_archivo_nota(request.title)
     try:
-        save_to_obsidian(request.title, request.content, tags=["reporte", "nexus"])
+        save_to_obsidian(request.title, analisis, tags=["reporte", "nexus"])
     except Exception as e:
         print(f"[OBSIDIAN] No se pudo sincronizar la nota: {e}")
     return GenerateNotesResponse(success=True, markdown=markdown_text, filename=filename)
@@ -327,8 +506,7 @@ async def ask_jarvis(request: AskRequest):
     if not prompt:
         raise HTTPException(status_code=400, detail="Falta el campo 'prompt' o 'message'.")
 
-    lower_prompt = prompt.lower()
-    if any(k in lower_prompt for k in ("llama a", "marcar a", "marca al")):
+    if es_comando_llamada(prompt):
         phone_number = extraer_telefono_e164(prompt)
         if not phone_number:
             return AskResponse(
@@ -336,30 +514,23 @@ async def ask_jarvis(request: AskRequest):
                 status="ok",
                 intent="call",
             )
-        message_task = re.sub(r"(?i)(llama a|marcar a|marca al)", "", prompt)
-        message_task = re.sub(r"\+?\d[\d\s\-().]{7,18}\d", "", message_task).strip() or prompt
-        resultado = trigger_bland_call(phone_number, message_task)
-        return AskResponse(response=resultado, status="ok", intent="call")
+        tarea = re.sub(r"(?i)(haz una llamada|llama a|llama al|marcar a|marcar al|marca al|marca a)", "", prompt)
+        tarea = re.sub(r"\+?\d[\d\s\-]{8,15}\d", "", tarea).strip() or prompt
+        resultado, call_id = trigger_bland_call(phone_number, tarea)
+        return AskResponse(response=resultado, status="ok", intent="call", call_id=call_id)
 
-    if es_comando_llamada(prompt):
-        telefono = extraer_telefono(prompt)
-        if not telefono:
-            return AskResponse(
-                response="No pude identificar el número telefónico. Inclúyelo con lada (ej. +521234567890 o 6621234567).",
-                status="ok",
-                intent="call",
-            )
-        phone_number = normalizar_telefono(telefono)
-        destinatario = extraer_destinatario(prompt)
-        task = extraer_tarea_llamada(prompt, destinatario)
-        resultado = make_call(phone_number, task)
-        return AskResponse(response=resultado, status="ok", intent="call")
-
-    if es_comando_reporte(prompt):
-        titulo = extraer_titulo_reporte(prompt)
-        markdown_text = generar_markdown_reporte(titulo, prompt)
+    if es_comando_reporte(prompt) or es_comando_nota(prompt):
+        titulo = extraer_titulo_reporte(prompt) if es_comando_reporte(prompt) else "Nota Jarvis"
+        if es_comando_nota(prompt) and prompt.lower().startswith("nota:"):
+            titulo = "Nota Jarvis"
         try:
-            save_to_obsidian(titulo, prompt, tags=["reporte", "nexus"])
+            analisis = generar_analisis_llm(prompt)
+            markdown_text = generar_markdown_reporte(titulo, analisis)
+        except Exception as e:
+            print(f"[LLM] {e}")
+            return AskResponse(response=str(e), status="error", intent="report", success=False)
+        try:
+            save_to_obsidian(titulo, analisis, tags=["reporte", "nexus"])
         except Exception as e:
             print(f"[OBSIDIAN] No se pudo sincronizar el reporte: {e}")
         return AskResponse(
@@ -381,29 +552,12 @@ async def ask_jarvis(request: AskRequest):
         playback_result = play_song(song_query)
         return AskResponse(response=playback_result, status="ok", intent="music")
 
-    if es_comando_nota(prompt):
-        note_content = prompt.split(":", 1)[-1].strip() or prompt
-        markdown_text = generar_markdown_reporte("Nota Rápida", note_content)
-        saved = save_to_obsidian("Nota Rápida", note_content, tags=["nexus", "nota"])
-        msg = markdown_text if saved else (
-            markdown_text + "\n\n> No pude sincronizar con Obsidian. Revisa GITHUB_TOKEN y GITHUB_REPO."
-        )
-        return AskResponse(
-            response=msg,
-            status="ok",
-            intent="obsidian",
-            markdown=markdown_text,
-            success=True,
-        )
-
-    return AskResponse(
-        response=(
-            f"Comando recibido en el Core: '{prompt}'. "
-            "Spotify, Obsidian y módulos de telemetría sincronizados."
-        ),
-        status="ok",
-        intent="chat",
-    )
+    try:
+        respuesta = responder_chat_llm(prompt)
+    except Exception as e:
+        print(f"[LLM CHAT] {e}")
+        return AskResponse(response=str(e), status="error", intent="chat")
+    return AskResponse(response=respuesta, status="ok", intent="chat")
 
 
 if __name__ == "__main__":
