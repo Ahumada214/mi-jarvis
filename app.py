@@ -58,11 +58,10 @@ BLAND_API_KEY = os.getenv("BLAND_API_KEY") or os.getenv("BLAND_AI_API_KEY", "").
 BLAND_API_URL = "https://api.bland.ai/v1/calls"
 GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
-GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODELOS = (
-    os.getenv("GROQ_MODEL", "").strip() or "llama-3.3-70b-versatile",
-    "llama3-70b-8192",
-    "llama-3.1-8b-instant",
+GROQ_MODELOS = ("llama-3.3-70b-versatile", "mixtral-8x7b-32768")
+JARVIS_SYSTEM_PROMPT = (
+    "Eres Jarvis, una IA integrada en NEXUS Spatial OS. "
+    "Responde de forma analítica, profesional y estructurada."
 )
 
 app = FastAPI(title="Jarvis NEXUS Core", version="1.0.0")
@@ -199,25 +198,26 @@ def _prompt_analisis(tema: str) -> str:
     )
 
 
-def _llamar_groq(messages: list, max_tokens: int = 4000) -> str:
+def _llamar_groq(prompt: str) -> str:
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY no está configurada.")
     ultimo_error = None
+    payload_messages = [
+        {"role": "system", "content": JARVIS_SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]
     for modelo in GROQ_MODELOS:
-        if not modelo:
-            continue
         try:
             resp = requests.post(
-                GROQ_CHAT_URL,
+                "https://api.groq.com/openai/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {GROQ_API_KEY}",
                     "Content-Type": "application/json",
                 },
                 json={
                     "model": modelo,
-                    "messages": messages,
-                    "temperature": 0.3,
-                    "max_tokens": max_tokens,
+                    "messages": payload_messages,
+                    "temperature": 0.5,
                 },
                 timeout=90,
             )
@@ -235,34 +235,25 @@ def _llamar_groq(messages: list, max_tokens: int = 4000) -> str:
     raise RuntimeError(f"Groq no devolvió texto. {ultimo_error or ''}".strip())
 
 
-def _llamar_anthropic(messages: list, max_tokens: int = 4000) -> str:
+def _llamar_anthropic(prompt: str) -> str:
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY no está configurada.")
-    system = ""
-    user_messages = []
-    for msg in messages:
-        if msg.get("role") == "system":
-            system = msg.get("content") or ""
-        else:
-            user_messages.append({"role": msg["role"], "content": msg["content"]})
-    if not user_messages:
-        user_messages = [{"role": "user", "content": system or "Hola"}]
     resp = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
             "x-api-key": ANTHROPIC_API_KEY,
             "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
+            "content-type": "application/json",
         },
         json={
-            "model": os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
-            "max_tokens": max_tokens,
-            "system": system or "Eres Jarvis, un asistente de alto rendimiento.",
-            "messages": user_messages,
+            "model": "claude-3-5-sonnet-20241022",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": prompt}],
         },
         timeout=90,
     )
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        raise RuntimeError(resp.text or f"HTTP {resp.status_code}")
     partes = resp.json().get("content") or []
     texto = "".join(p.get("text", "") for p in partes if isinstance(p, dict)).strip()
     if not texto:
@@ -271,18 +262,18 @@ def _llamar_anthropic(messages: list, max_tokens: int = 4000) -> str:
     return texto
 
 
-def llamar_llm(messages: list, max_tokens: int = 4000) -> str:
+def llamar_llm(prompt: str) -> str:
     """Usa Groq (GROQ_API_KEY) o Anthropic (ANTHROPIC_API_KEY), las keys de Render."""
     errores = []
     if GROQ_API_KEY:
         try:
-            return _llamar_groq(messages, max_tokens=max_tokens)
+            return _llamar_groq(prompt)
         except Exception as e:
             errores.append(f"Groq: {e}")
             print(f"[LLM GROQ] {e}")
     if ANTHROPIC_API_KEY:
         try:
-            return _llamar_anthropic(messages, max_tokens=max_tokens)
+            return _llamar_anthropic(prompt)
         except Exception as e:
             errores.append(f"Anthropic: {e}")
             print(f"[LLM ANTHROPIC] {e}")
@@ -292,30 +283,13 @@ def llamar_llm(messages: list, max_tokens: int = 4000) -> str:
 
 def generar_analisis_llm(tema: str) -> str:
     """Genera un análisis enriquecido con Groq o Anthropic. Nunca devuelve el prompt crudo."""
-    return llamar_llm(
-        [
-            {"role": "system", "content": "Eres un analista sénior. Responde solo en Markdown."},
-            {"role": "user", "content": _prompt_analisis(tema)},
-        ],
-        max_tokens=4000,
-    )
+    return llamar_llm(_prompt_analisis(tema))
 
 
 def responder_chat_llm(prompt: str) -> str:
     """Respuesta de conversación con el mismo LLM de Render."""
-    return llamar_llm(
-        [
-            {
-                "role": "system",
-                "content": (
-                    "Eres Jarvis, asistente de alto rendimiento. "
-                    "Responde en español, con claridad y utilidad."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=1500,
-    )
+    return llamar_llm(prompt)
+
 
 
 def extraer_secciones_analisis(texto: str) -> tuple:
