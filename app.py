@@ -31,6 +31,13 @@ try:
 except ImportError:
     play_song = None
 
+try:
+    from obsidian_sync import save_to_obsidian
+except ImportError:
+    def save_to_obsidian(title: str, content: str, tags=None) -> bool:
+        print("[OBSIDIAN] Módulo obsidian_sync no disponible.")
+        return False
+
 # ==========================================
 # 1. CREDENCIALES Y VARIABLES DE ENTORNO
 # ==========================================
@@ -417,6 +424,10 @@ Formato JSON obligatorio:
             titulo = params.get("doc_titulo") or "Analisis_Investigacion"
             tema = params.get("doc_tema") or prompt_usuario
             contenido_md = redactar_investigacion_profunda(titulo, tema)
+            try:
+                save_to_obsidian(titulo, contenido_md, tags=["reporte", "investigacion", "jarvis"])
+            except Exception as e:
+                print(f"[OBSIDIAN] No se pudo subir el reporte '{titulo}': {e}")
 
             if channel == "telegram" and chat_id:
                 obsidian_bytes = formatear_para_obsidian(titulo, contenido_md)
