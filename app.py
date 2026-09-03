@@ -492,6 +492,16 @@ threading.Thread(target=iniciar_servidor, daemon=True).start()
 # ==========================================
 # 8. BOT DE TELEGRAM
 # ==========================================
+TELEGRAM_MAX_CHARS = 4000
+
+
+async def enviar_texto_telegram(bot, chat_id, texto_respuesta: str):
+    """Envía el texto en bloques de 4000 caracteres para evitar 'Message is too long'."""
+    mensaje = texto_respuesta or "Sin respuesta."
+    for i in range(0, len(mensaje), TELEGRAM_MAX_CHARS):
+        await bot.send_message(chat_id=chat_id, text=mensaje[i:i + TELEGRAM_MAX_CHARS])
+
+
 async def responder_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     audio_in = f"in_{chat_id}.ogg"
@@ -536,7 +546,7 @@ async def responder_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     caption=f"📝 _{transcripcion[:200]}..._",
                     parse_mode="Markdown"
                 )
-            await update.message.reply_text(f"🤖 {respuesta_texto}")
+            await enviar_texto_telegram(context.bot, chat_id, f"🤖 {respuesta_texto}")
 
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
@@ -549,7 +559,7 @@ async def responder_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     try:
         resultado = procesar_con_ia(update.message.text, chat_id=chat_id, channel="telegram")
-        await update.message.reply_text(resultado["texto"])
+        await enviar_texto_telegram(context.bot, chat_id, resultado["texto"])
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
