@@ -53,14 +53,14 @@ tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 def obtener_modelo_groq():
     """Detecta el modelo disponible en la cuenta de Groq."""
     candidatos_validos = [
-        "model=qwen/qwen3.6-27b",
+        "openai/gpt-oss-120b",
         "llama-3.1-8b-instant",
         "llama3-70b-8192",
         "llama3-8b-8192",
         "mixtral-8x7b-32768"
     ]
     if not groq_client:
-        return "llama-3.3-70b-versatile"
+        return "openai/gpt-oss-120b"
     try:
         modelos_remotos = groq_client.models.list()
         ids_disponibles = {m.id for m in modelos_remotos.data}
@@ -69,7 +69,7 @@ def obtener_modelo_groq():
                 return modelo
     except Exception as e:
         print(f"[GROQ MODEL LIST ERROR] {e}")
-    return "llama-3.3-70b-versatile"
+    return "openai/gpt-oss-120b"
 
 def redactar_investigacion_profunda(tema: str, contexto: str) -> str:
     """Usa Claude 3.5 Sonnet si la API key existe y tiene saldo; si no, usa Groq."""
