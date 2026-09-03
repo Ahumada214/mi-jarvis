@@ -213,12 +213,23 @@ def nombre_archivo_nota(title: str) -> str:
     return f"{limpio[:80]}.md"
 
 
+def _texto_gemini(res) -> Optional[str]:
+    try:
+        data = res.json()
+    except Exception:
+        return None
+    if "candidates" in data and data["candidates"]:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    return None
+
+
 def call_gemini(prompt: str) -> str:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         return "Error: GEMINI_API_KEY no configurada en las variables de entorno."
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}"
+    url_v1 = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{
@@ -227,14 +238,42 @@ def call_gemini(prompt: str) -> str:
     }
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=30)
-        data = res.json()
-        if "candidates" in data and len(data["candidates"]) > 0:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        elif "error" in data:
-            return f"Error API Gemini ({data['error'].get('code')}): {data['error'].get('message')}"
-        else:
-            return f"Respuesta inesperada de Gemini: {res.text}"
+        texto = _texto_gemini(res)
+        if texto:
+            return texto
+        es_404 = res.status_code == 404
+        try:
+            data = res.json()
+            codigo = (data.get("error") or {}).get("code")
+            es_404 = es_404 or codigo == 404 or codigo == "404"
+        except Exception:
+            data = {}
+        if es_404 or not texto:
+            print(f"[GEMINI] Fallback a v1 tras {res.status_code}: {(res.text or '')[:300]}")
+            res_v1 = requests.post(url_v1, headers=headers, json=payload, timeout=30)
+            texto_v1 = _texto_gemini(res_v1)
+            if texto_v1:
+                return texto_v1
+            try:
+                data_v1 = res_v1.json()
+            except Exception:
+                return f"Respuesta inesperada de Gemini: {res_v1.text}"
+            if "error" in data_v1:
+                err = data_v1["error"]
+                return f"Error API Gemini ({err.get('code')}): {err.get('message')}"
+            return f"Respuesta inesperada de Gemini: {res_v1.text}"
+        if isinstance(data, dict) and "error" in data:
+            err = data["error"]
+            return f"Error API Gemini ({err.get('code')}): {err.get('message')}"
+        return f"Respuesta inesperada de Gemini: {res.text}"
     except Exception as e:
+        try:
+            res_v1 = requests.post(url_v1, headers=headers, json=payload, timeout=30)
+            texto_v1 = _texto_gemini(res_v1)
+            if texto_v1:
+                return texto_v1
+        except Exception as e2:
+            return f"Error de conexión con Gemini: {str(e2)}"
         return f"Error de conexión con Gemini: {str(e)}"
 
 
