@@ -60,7 +60,7 @@ GROQ_API_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
 JARVIS_SYSTEM_PROMPT = (
     "Eres Jarvis, una IA integrada en NEXUS Spatial OS. "
-    "Responde de forma analítica, profesional y estructurada."
+    "Responde de forma concisa y analítica."
 )
 
 app = FastAPI(title="Jarvis NEXUS Core", version="1.0.0")
@@ -207,7 +207,7 @@ def _llamar_groq(prompt: str) -> str:
             "Content-Type": "application/json",
         },
         json={
-            "model": "llama-3.3-70b-versatile",
+            "model": "llama3-8b-8192",
             "messages": [
                 {"role": "system", "content": JARVIS_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
@@ -221,7 +221,7 @@ def _llamar_groq(prompt: str) -> str:
     texto = (resp.json()["choices"][0]["message"]["content"] or "").strip()
     if not texto:
         raise RuntimeError("Groq devolvió una respuesta vacía.")
-    print("[LLM] Respuesta generada con Groq (llama-3.3-70b-versatile)")
+    print("[LLM] Respuesta generada con Groq (llama3-8b-8192)")
     return texto
 
 
