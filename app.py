@@ -1,12 +1,11 @@
 import os
 import re
-from spotify_player import play_song
+from typing import Optional
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
 
-# Importación segura de los módulos auxiliares
 try:
     from spotify_player import play_song
 except ImportError:
@@ -14,43 +13,86 @@ except ImportError:
         return "Módulo spotify_player no encontrado en el servidor."
 
 try:
-    from obsidian_sync import sync_note_to_obsidian
+    from obsidian_sync import save_to_obsidian
 except ImportError:
-    def sync_note_to_obsidian(title: str, content: str) -> str:
-        return "Sincronización con Obsidian no configurada."
+    def save_to_obsidian(title: str, content: str, tags=None) -> bool:
+        return False
 
-# Inicialización de FastAPI
+
 app = FastAPI(title="Jarvis NEXUS Core", version="1.0.0")
 
-# Configuración de CORS para permitir peticiones desde localhost:3000 (NEXUS)
+# Starlette no permite allow_origins=["*"] con allow_credentials=True.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permite el enlace directo desde NEXUS
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
 class AskRequest(BaseModel):
-    prompt: str
+    prompt: Optional[str] = None
+    message: Optional[str] = None
     user_id: Optional[str] = "default_user"
+    chat_id: Optional[str] = None
+
 
 class AskResponse(BaseModel):
     response: str
+    status: str = "ok"
     intent: Optional[str] = "chat"
+
+
+MUSIC_TRIGGERS = (
+    "reproduce",
+    "reproducir",
+    "pon la canción",
+    "pon la cancion",
+    "pon canción",
+    "pon cancion",
+    "pon música",
+    "pon musica",
+    "ponme",
+    "play ",
+    "escuchar ",
+    "quiero escuchar",
+    "dale play",
+)
+
 
 def clean_music_query(text: str) -> str:
     """Limpia el comando del usuario para extraer solo el nombre de la canción o artista."""
     patterns = [
         r"^reproduce\s+(la\s+canción\s+)?(de\s+)?",
-        r"^pon\s+(la\s+canción\s+)?(de\s+)?",
+        r"^reproducir\s+(la\s+canción\s+)?(de\s+)?",
+        r"^pon(?:me)?\s+(la\s+canción\s+)?(de\s+)?",
         r"^escuchar\s+",
+        r"^quiero escuchar\s+",
+        r"^dale play\s+(a\s+)?",
         r"^play\s+",
     ]
-    query = text.strip()
+    query = (text or "").strip()
     for pattern in patterns:
         query = re.sub(pattern, "", query, flags=re.IGNORECASE)
-    return query.strip()
+    return query.strip(" .¡!¿?")
+
+
+def es_comando_musica(text: str) -> bool:
+    lower = (text or "").lower()
+    return any(trigger in lower for trigger in MUSIC_TRIGGERS)
+
+
+def es_comando_nota(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        lower.startswith("nota:")
+        or lower.startswith("guardar nota")
+        or "guarda en obsidian" in lower
+        or "sube a obsidian" in lower
+    )
+
 
 @app.get("/")
 def health_check():
@@ -60,38 +102,46 @@ def health_check():
         "spotify_auth_ready": bool(os.getenv("SPOTIFY_REFRESH_TOKEN")),
     }
 
+
 @app.post("/ask", response_model=AskResponse)
 async def ask_jarvis(request: AskRequest):
-    prompt = request.prompt.strip()
-    lower_prompt = prompt.lower()
-
+    prompt = (request.prompt or request.message or "").strip()
     if not prompt:
-        raise HTTPException(status_code=400, detail="El prompt no puede estar vacío.")
+        raise HTTPException(status_code=400, detail="Falta el campo 'prompt' o 'message'.")
 
-    # 1. Detección de comando de Spotify
-    music_triggers = ["reproduce", "pon la canción", "pon canción", "play ", "escuchar "]
-    if any(lower_prompt.startswith(trigger) or f" {trigger}" in lower_prompt for trigger in ["reproduce", "pon "]):
+    if es_comando_musica(prompt):
         song_query = clean_music_query(prompt)
         if not song_query:
             return AskResponse(
                 response="Por favor especifica el nombre de la pista que deseas reproducir.",
-                intent="music"
+                status="ok",
+                intent="music",
             )
-        
-        # Ejecuta la reproducción sin interacción de consola (headless)
         playback_result = play_song(song_query)
-        return AskResponse(response=playback_result, intent="music")
+        return AskResponse(response=playback_result, status="ok", intent="music")
 
-    # 2. Detección de notas de Obsidian
-    if lower_prompt.startswith("nota:") or lower_prompt.startswith("guardar nota"):
-        note_content = prompt.split(":", 1)[-1].strip()
-        result = sync_note_to_obsidian(title="Nota Rápida", content=note_content)
-        return AskResponse(response=result, intent="obsidian")
+    if es_comando_nota(prompt):
+        note_content = prompt.split(":", 1)[-1].strip() or prompt
+        saved = save_to_obsidian("Nota Rápida", note_content, tags=["nexus", "nota"])
+        msg = (
+            "Nota sincronizada con Obsidian."
+            if saved
+            else "No pude guardar la nota. Revisa GITHUB_TOKEN y GITHUB_REPO."
+        )
+        return AskResponse(response=msg, status="ok", intent="obsidian")
 
-    # 3. Respuesta estándar de conversación / fallback
-    # Si tienes configurado cliente LLM (OpenAI/Gemini), intégralo aquí.
-    response_msg = (
-        f"Comando recibido en el Core: '{prompt}'. "
-        "Spotify, Obsidian y módulos de telemetría sincronizados."
+    return AskResponse(
+        response=(
+            f"Comando recibido en el Core: '{prompt}'. "
+            "Spotify, Obsidian y módulos de telemetría sincronizados."
+        ),
+        status="ok",
+        intent="chat",
     )
-    return AskResponse(response=response_msg, intent="chat")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
