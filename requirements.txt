@@ -6,3 +6,5 @@ spotipy
 anthropic
 python-telegram-bot
 PyGithub
+groq
+tavily-python
