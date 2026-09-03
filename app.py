@@ -53,7 +53,7 @@ tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 def obtener_modelo_groq():
     """Detecta el modelo disponible en la cuenta de Groq."""
     candidatos_validos = [
-        "llama-3.3-70b-versatile",
+        "model=qwen/qwen3.6-27b",
         "llama-3.1-8b-instant",
         "llama3-70b-8192",
         "llama3-8b-8192",

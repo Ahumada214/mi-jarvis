@@ -64,16 +64,19 @@ def save_to_obsidian(title: str, content: str, tags: Optional[List[str]] = None)
             print("[OBSIDIAN] PyGithub no está instalado. Se omite la sincronización.")
             return False
 
-        if not GITHUB_TOKEN or not GITHUB_REPO:
+        token = (os.getenv("GITHUB_TOKEN") or GITHUB_TOKEN or "").strip()
+        repo_name = (os.getenv("GITHUB_REPO") or GITHUB_REPO or "").strip()
+        folder = (os.getenv("OBSIDIAN_FOLDER") or OBSIDIAN_FOLDER or "Jarvis_Notes").strip() or "Jarvis_Notes"
+        if not token or not repo_name:
             print("[OBSIDIAN] Faltan GITHUB_TOKEN o GITHUB_REPO. Se omite la sincronización.")
             return False
 
         filename = sanitizar_titulo(title)
-        ruta = f"{OBSIDIAN_FOLDER}/{filename}.md"
+        ruta = f"{folder}/{filename}.md"
         nota = _construir_nota(title, content, _normalizar_tags(tags))
 
-        cliente = Github(GITHUB_TOKEN)
-        repo = cliente.get_repo(GITHUB_REPO)
+        cliente = Github(token)
+        repo = cliente.get_repo(repo_name)
         branch = repo.default_branch
 
         try:
@@ -85,7 +88,7 @@ def save_to_obsidian(title: str, content: str, tags: Optional[List[str]] = None)
                 sha=existente.sha,
                 branch=branch,
             )
-            print(f"[OBSIDIAN] Nota actualizada en {GITHUB_REPO}:{ruta} (branch {branch})")
+            print(f"[OBSIDIAN] Nota actualizada en {repo_name}:{ruta} (branch {branch})")
             return True
         except GithubException as e:
             if getattr(e, "status", None) != 404:
@@ -96,7 +99,7 @@ def save_to_obsidian(title: str, content: str, tags: Optional[List[str]] = None)
                 content=nota,
                 branch=branch,
             )
-            print(f"[OBSIDIAN] Nota creada en {GITHUB_REPO}:{ruta} (branch {branch})")
+            print(f"[OBSIDIAN] Nota creada en {repo_name}:{ruta} (branch {branch})")
             return True
 
     except GithubException as e:
