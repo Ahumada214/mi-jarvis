@@ -1,7 +1,10 @@
-fastapi
-uvicorn
-requests
-python-dotenv
-spotipy
-anthropic
 python-telegram-bot
+groq
+anthropic
+httpx
+edge-tts
+google-api-python-client
+google-auth
+tavily-python
+spotipy
+requests
