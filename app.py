@@ -78,22 +78,78 @@ def obtener_modelo_groq():
         print(f"[GROQ MODEL LIST ERROR] {e}")
     return "openai/gpt-oss-120b"
 
+ACTIVOS_FINANCIEROS = (
+    "nvidia", "nvda", "apple", "aapl", "tesla", "tsla", "microsoft", "msft",
+    "amazon", "amzn", "alphabet", "google", "googl", "meta", "amd", "intel",
+    "acción", "acciones", "empresa", "ticker", "bono", "bonos",
+    "portafolio", "portafolios", "etf", "equity", "valuación de",
+    "valuacion de", "tesis de inversión", "activo financiero",
+)
+TEMAS_CONCEPTUALES = (
+    "black-scholes", "black scholes", "algoritmo", "algoritmos",
+    "teorema", "ecuación", "ecuacion", "física", "fisica",
+    "modelo teórico", "modelo teorico", "software", "programación",
+    "programacion", "definición", "definicion", "fundamentos",
+    "matemático", "matematica", "matemáticas", "matematicas",
+)
+
+
+def es_analisis_de_activo(tema: str, contexto: str = "") -> bool:
+    """True solo si el usuario pide análisis explícito de empresa, acción o activo."""
+    texto = f"{tema} {contexto}".lower()
+    es_conceptual = any(p in texto for p in TEMAS_CONCEPTUALES)
+    es_activo = any(p in texto for p in ACTIVOS_FINANCIEROS)
+    if es_conceptual and not es_activo:
+        return False
+    if es_conceptual and es_activo:
+        return any(p in texto for p in (
+            "acción", "acciones", "empresa", "ticker", "bono", "bonos",
+            "portafolio", "etf", "valuación de", "valuacion de",
+        ))
+    return es_activo
+
+
+def titulo_desde_tema(tema: str) -> str:
+    limpio = re.sub(r"[^\w\sáéíóúñÁÉÍÓÚÑ-]", "", tema or "").strip()
+    limpio = re.sub(r"\s+", "_", limpio)[:80].strip("_")
+    return limpio or "Nota_Tecnica"
+
+
 def redactar_investigacion_profunda(tema: str, contexto: str) -> str:
-    """Usa Claude 3.5 Sonnet si la API key existe y tiene saldo; si no, usa Groq."""
-    prompt_redaccion = f"""Eres un analista financiero e investigador sénior de banca de inversión.
-Redacta un análisis exhaustivo, técnico y estructurado sobre: {tema}.
+    """Redacta con estructura dinámica: técnica/conceptual o análisis de activo."""
+    if es_analisis_de_activo(tema, contexto):
+        prompt_redaccion = f"""Eres un analista financiero sénior.
+Redacta un análisis exhaustivo sobre el activo o empresa: {tema}.
 
 Contexto y solicitud: {contexto}
 
-Estructura obligatoria:
+Estructura obligatoria en Markdown:
 - # {tema}
-- ## Resumen Ejecutivo y Tesis de Inversión
-- ## Métricas de Valuación y Múltiplos Financieros (P/E, EV/EBITDA, márgenes, crecimiento)
-- ## Ventajas Competitivas Cuantitativas y Foso Económico (Moat)
-- ## Riesgos Clave y Amenazas de Mercado
-- ## Conclusión y Perspectiva
+- ## Resumen Ejecutivo
+- ## Tesis de Inversión
+- ## Métricas y Valuación
+- ## Riesgos de Mercado
+- ## Conclusión Estratégica
 - Tags recomendados al pie
 
+Usa formato limpio apto para Obsidian."""
+    else:
+        prompt_redaccion = f"""Eres un investigador técnico y académico.
+Redacta una nota conceptual, rigurosa y estructurada sobre: {tema}.
+
+Contexto y solicitud: {contexto}
+
+Estructura obligatoria en Markdown:
+- # {tema}
+- ## Definición Conceptual
+- ## Fundamentos Teóricos / Matemáticos
+- ## Variables y Ecuaciones Clave
+- ## Casos de Uso
+- ## Limitaciones
+- Tags recomendados al pie
+
+PROHIBIDO incluir títulos como "Tesis de Inversión", "Valuación" o tablas de precios,
+salvo que el tema sea el análisis de un activo real (empresa, acción, bono o portafolio).
 Usa formato Markdown limpio apto para notas de Obsidian."""
 
     if claude_client:
@@ -421,11 +477,16 @@ Formato JSON obligatorio:
             params["busqueda_query"] = params.get("busqueda_query") or params.get("doc_tema") or prompt_usuario
 
         if accion == "crear_doc":
-            titulo = params.get("doc_titulo") or "Analisis_Investigacion"
             tema = params.get("doc_tema") or prompt_usuario
+            titulo = (params.get("doc_titulo") or "").strip() or titulo_desde_tema(tema)
             contenido_md = redactar_investigacion_profunda(titulo, tema)
+            tags_doc = (
+                ["finanzas", "activo", "reporte"]
+                if es_analisis_de_activo(titulo, tema)
+                else ["nota_tecnica", "conceptual", "investigacion"]
+            )
             try:
-                save_to_obsidian(titulo, contenido_md, tags=["reporte", "investigacion", "jarvis"])
+                save_to_obsidian(titulo, contenido_md, tags=tags_doc)
             except Exception as e:
                 print(f"[OBSIDIAN] No se pudo subir el reporte '{titulo}': {e}")
 
