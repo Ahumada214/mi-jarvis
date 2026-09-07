@@ -56,81 +56,121 @@ claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if (anthropic and
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
 # ==========================================
-# 2. MOTOR DE VISIÓN TÁCTICA MULTIMODAL
+# 2. MOTOR DE VISIÓN TÁCTICA MULTIMODAL (HÍBRIDO)
 # ==========================================
 def procesar_vision(prompt: str, image_b64: str, system_prompt: str = None) -> dict:
-    """Procesa capturas de pantalla y gráficos mediante modelos multimodales con fallback."""
-    if not claude_client:
-        return {
-            "texto": "El núcleo de visión táctica requiere la clave de Anthropic.",
-            "markdown": ""
-        }
-
-    # Limpieza de cabeceras Base64 si vienen presentes
+    """Procesa capturas de pantalla y gráficos mediante Claude y fallback a Groq Vision."""
+    # Limpieza de cabeceras Base64
     if "," in image_b64:
         image_b64 = image_b64.split(",", 1)[1]
     image_b64 = image_b64.strip()
 
     sys_msg = system_prompt or (
-        "Eres Jarvis, un analista cuantitativo y de mercados táctico. "
+        "Eres Jarvis, analista táctico cuantitativo y de mercados de nivel militar. "
         "Inspecciona exhaustivamente el gráfico o captura de pantalla. "
         "Identifica estructura de mercado, tendencias, niveles clave de soporte/resistencia, "
         "y formula una conclusión operativa contundente."
     )
+    prompt_instruccion = prompt or "Realiza una evaluación técnica y táctica completa del gráfico o información en pantalla."
 
-    user_content = [
-        {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/jpeg",
-                "data": image_b64
-            }
-        },
-        {
-            "type": "text",
-            "text": prompt or "Realiza una evaluación técnica y táctica completa del gráfico o información en pantalla."
-        }
-    ]
+    # 1. INTENTO PRINCIPAL: ANTHROPIC CLAUDE (SI ESTÁ HABILITADO)
+    if claude_client:
+        modelos_vision = [
+            "claude-3-5-sonnet-latest",
+            "claude-3-5-sonnet-20240620",
+            "claude-3-haiku-20240307"
+        ]
+        for modelo in modelos_vision:
+            try:
+                print(f"[VISION CORE] Intentando con Claude: {modelo}...")
+                res = claude_client.messages.create(
+                    model=modelo,
+                    max_tokens=2500,
+                    system=sys_msg,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": image_b64
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt_instruccion
+                            }
+                        ]
+                    }]
+                )
+                full_text = res.content[0].text
+                print(f"[VISION CORE] Análisis completado con éxito mediante Claude ({modelo}).")
 
-    # Lista de candidatos válidos en orden de potencia
-    modelos_vision = [
-        "claude-3-5-sonnet-latest",
-        "claude-3-5-sonnet-20240620",
-        "claude-3-haiku-20240307"
-    ]
+                lineas = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("#")]
+                resumen_voz = " ".join(lineas[:2]) if lineas else "Reconocimiento visual completado, señor."
+                if len(resumen_voz) > 300:
+                    resumen_voz = resumen_voz[:290] + "..."
 
-    ultimo_error = None
+                return {
+                    "texto": resumen_voz,
+                    "markdown": full_text
+                }
+            except Exception as e:
+                print(f"[VISION CLAUDE ERROR con {modelo}]: {e}")
+                continue
 
-    for modelo in modelos_vision:
-        try:
-            print(f"[VISION CORE] Probando modelo: {modelo}...")
-            res = claude_client.messages.create(
-                model=modelo,
-                max_tokens=2500,
-                system=sys_msg,
-                messages=[{"role": "user", "content": user_content}]
-            )
-            full_text = res.content[0].text
-            print(f"[VISION CORE] Análisis completado con éxito mediante {modelo}.")
+    # 2. RESPALDO AUTOMÁTICO: GROQ VISION (LLAMA 3.2 VISION)
+    if groq_client:
+        modelos_groq_vision = [
+            "llama-3.2-11b-vision-preview",
+            "llama-3.2-90b-vision-preview"
+        ]
+        for mod_groq in modelos_groq_vision:
+            try:
+                print(f"[VISION CORE] Activando respaldo táctico con Groq Vision: {mod_groq}...")
+                completion = groq_client.chat.completions.create(
+                    model=mod_groq,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"{sys_msg}\n\nInstrucción de análisis: {prompt_instruccion}"
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{image_b64}"
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    temperature=0.2,
+                    max_tokens=2000
+                )
+                full_text = completion.choices[0].message.content
+                print(f"[VISION CORE] Análisis visual completado exitosamente con Groq ({mod_groq}).")
 
-            lineas = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("#")]
-            resumen_voz = " ".join(lineas[:2]) if lineas else "Reconocimiento visual completado, señor."
-            if len(resumen_voz) > 300:
-                resumen_voz = resumen_voz[:290] + "..."
+                lineas = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("#")]
+                resumen_voz = " ".join(lineas[:2]) if lineas else "Reconocimiento visual completado, señor."
+                if len(resumen_voz) > 300:
+                    resumen_voz = resumen_voz[:290] + "..."
 
-            return {
-                "texto": resumen_voz,
-                "markdown": full_text
-            }
-        except Exception as e:
-            print(f"[VISION ERROR con {modelo}]: {e}")
-            ultimo_error = e
-            continue
+                return {
+                    "texto": resumen_voz,
+                    "markdown": full_text
+                }
+            except Exception as groq_err:
+                print(f"[VISION GROQ ERROR con {mod_groq}]: {groq_err}")
+                continue
 
     return {
-        "texto": f"Excepción en visión táctica: {ultimo_error}",
-        "markdown": f"Error al procesar captura visual: {ultimo_error}"
+        "texto": "Comandante José, no fue posible establecer enlace con los motores de visión.",
+        "markdown": "Error en el pipeline visual: Ningún motor multimodal respondió con éxito."
     }
 
 # ==========================================
@@ -224,15 +264,16 @@ Estructura obligatoria en Markdown:
 Usa formato Markdown limpio apto para notas de Obsidian."""
 
     if claude_client:
-        try:
-            res = claude_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=4000,
-                messages=[{"role": "user", "content": prompt_redaccion}]
-            )
-            return res.content[0].text
-        except Exception as e:
-            print(f"[CLAUDE ERROR, USANDO FALLBACK GROQ] {e}")
+        for mod in ["claude-3-5-sonnet-latest", "claude-3-5-sonnet-20240620"]:
+            try:
+                res = claude_client.messages.create(
+                    model=mod,
+                    max_tokens=4000,
+                    messages=[{"role": "user", "content": prompt_redaccion}]
+                )
+                return res.content[0].text
+            except Exception as e:
+                print(f"[CLAUDE ERROR {mod}] {e}")
 
     if groq_client:
         try:
@@ -347,12 +388,16 @@ def sintetizar_respuesta_breve(pregunta: str, contexto: str = "") -> str:
     try:
         if claude_client:
             res = claude_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-3-5-sonnet-latest",
                 max_tokens=180,
                 messages=[{"role": "user", "content": instrucciones}],
             )
             return (res.content[0].text or "").strip()
-        if groq_client:
+    except Exception:
+        pass
+
+    if groq_client:
+        try:
             modelo = obtener_modelo_groq()
             res = groq_client.chat.completions.create(
                 model=modelo,
@@ -361,8 +406,9 @@ def sintetizar_respuesta_breve(pregunta: str, contexto: str = "") -> str:
                 temperature=0.2,
             )
             return (res.choices[0].message.content or "").strip()
-    except Exception as e:
-        print(f"[SINTESIS BREVE] {e}")
+        except Exception as e:
+            print(f"[SINTESIS BREVE] {e}")
+
     return contexto.split("\n")[0][:280] if contexto else "No pude obtener una respuesta breve."
 
 def crear_evento_calendario(titulo, fecha_inicio_iso, fecha_fin_iso):
@@ -463,7 +509,7 @@ def procesar_webhook_bland(data_bytes):
 # ==========================================
 # 7. ENRUTAMIENTO RÁPIDO DE TEXTO (LLM)
 # ==========================================
-def procesar_con_ia(prompt_usuario, chat_id=None, channel="telegram"):
+def procesar_con_ia(prompt_usuario, chat_id=None, channel="nexus"):
     ahora_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     system_prompt = f"""Eres Jarvis, asistente táctico de alto rendimiento. Fecha actual: {ahora_str}.
 
@@ -491,24 +537,24 @@ Formato JSON obligatorio:
   "respuesta_voz": "<Confirmación breve>"
 }}
 """
-    try:
-        data = {}
-        if claude_client:
-            try:
-                res = claude_client.messages.create(
-                    model="claude-3-5-sonnet-20241022",
-                    max_tokens=1000,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": prompt_usuario}]
-                )
-                txt = res.content[0].text
-                match = re.search(r'\{.*\}', txt, re.DOTALL)
-                if match:
-                    data = json.loads(match.group(0))
-            except Exception as e:
-                print(f"[CLAUDE PARSE ERROR] {e}")
+    data = {}
+    if claude_client:
+        try:
+            res = claude_client.messages.create(
+                model="claude-3-5-sonnet-latest",
+                max_tokens=1000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt_usuario}]
+            )
+            txt = res.content[0].text
+            match = re.search(r'\{.*\}', txt, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+        except Exception as e:
+            print(f"[CLAUDE PARSE ERROR]: {e}")
 
-        if not data and groq_client:
+    if not data and groq_client:
+        try:
             modelo = obtener_modelo_groq()
             completion = groq_client.chat.completions.create(
                 model=modelo,
@@ -521,74 +567,71 @@ Formato JSON obligatorio:
                 max_tokens=1500
             )
             data = json.loads(completion.choices[0].message.content)
+        except Exception as e:
+            print(f"[GROQ PARSE ERROR]: {e}")
 
-        accion = data.get("accion", "conversar")
-        params = data.get("parametros", {})
-        resp_voz = data.get("respuesta_voz", "Entendido.")
+    accion = data.get("accion", "conversar")
+    params = data.get("parametros", {})
+    resp_voz = data.get("respuesta_voz", "Entendido.")
 
-        if accion == "crear_doc" and not pide_documento_largo(prompt_usuario):
-            accion = "buscar_web"
-            params["busqueda_query"] = params.get("busqueda_query") or params.get("doc_tema") or prompt_usuario
+    if accion == "crear_doc" and not pide_documento_largo(prompt_usuario):
+        accion = "buscar_web"
+        params["busqueda_query"] = params.get("busqueda_query") or params.get("doc_tema") or prompt_usuario
 
-        if accion == "crear_doc":
-            tema = params.get("doc_tema") or prompt_usuario
-            titulo = (params.get("doc_titulo") or "").strip() or titulo_desde_tema(tema)
-            contenido_md = redactar_investigacion_profunda(titulo, tema)
-            tags_doc = (
-                ["finanzas", "activo", "reporte"]
-                if es_analisis_de_activo(titulo, tema)
-                else ["nota_tecnica", "conceptual", "investigacion"]
-            )
-            try:
-                save_to_obsidian(titulo, contenido_md, tags=tags_doc)
-            except Exception as e:
-                print(f"[OBSIDIAN] Error al guardar: {e}")
+    if accion == "crear_doc":
+        tema = params.get("doc_tema") or prompt_usuario
+        titulo = (params.get("doc_titulo") or "").strip() or titulo_desde_tema(tema)
+        contenido_md = redactar_investigacion_profunda(titulo, tema)
+        tags_doc = (
+            ["finanzas", "activo", "reporte"]
+            if es_analisis_de_activo(titulo, tema)
+            else ["nota_tecnica", "conceptual", "investigacion"]
+        )
+        try:
+            save_to_obsidian(titulo, contenido_md, tags=tags_doc)
+        except Exception as e:
+            print(f"[OBSIDIAN] Error al guardar: {e}")
 
-            if channel == "telegram" and chat_id:
-                obsidian_bytes = formatear_para_obsidian(titulo, contenido_md)
-                enviar_documento_telegram(chat_id, f"{titulo}.md", obsidian_bytes, 'text/markdown', f"🧠 *Nota para Obsidian:* `{titulo}.md`")
-                html_bytes = formatear_documento_html(titulo, contenido_md)
-                enviar_documento_telegram(chat_id, f"{titulo}.html", html_bytes, 'text/html', f"📄 Documento HTML: `{titulo}.html`")
+        if channel == "telegram" and chat_id:
+            obsidian_bytes = formatear_para_obsidian(titulo, contenido_md)
+            enviar_documento_telegram(chat_id, f"{titulo}.md", obsidian_bytes, 'text/markdown', f"🧠 *Nota para Obsidian:* `{titulo}.md`")
+            html_bytes = formatear_documento_html(titulo, contenido_md)
+            enviar_documento_telegram(chat_id, f"{titulo}.html", html_bytes, 'text/html', f"📄 Documento HTML: `{titulo}.html`")
 
-            motor_usado = "Claude 3.5 Sonnet" if claude_client else "Groq"
-            resumen = f"{resp_voz} He completado el análisis con {motor_usado}."
-            return {"texto": resumen, "markdown": contenido_md}
+        resumen = f"{resp_voz} Análisis completado."
+        return {"texto": resumen, "markdown": contenido_md}
 
-        elif accion == "reproducir_musica":
-            query = params.get("cancion_query") or prompt_usuario
-            if channel == "nexus" and play_song:
-                res = play_song(query)
-                return {"texto": res, "markdown": f"**Spotify:** {res}"}
-            else:
-                res = buscar_y_enviar_audio(chat_id, query)
-                return {"texto": f"{resp_voz} {res}", "markdown": f"**Música:** {res}"}
-
-        elif accion == "llamada" and params.get("telefono"):
-            msg = procesar_orden_llamada(params.get("telefono"), params.get("destinatario", "contacto"), params.get("mensaje_llamada", "Saludar"), chat_id)
-            return {"texto": msg, "markdown": msg}
-
-        elif accion == "buscar_web" and params.get("busqueda_query"):
-            crudo = buscar_en_internet(params.get("busqueda_query"))
-            breve = sintetizar_respuesta_breve(prompt_usuario, crudo)
-            return {"texto": breve, "markdown": breve}
-
-        elif accion == "crear_evento" and params.get("evento_titulo"):
-            res = crear_evento_calendario(params.get("evento_titulo"), params.get("evento_inicio"), params.get("evento_fin"))
-            return {"texto": res, "markdown": res}
-
-        elif accion == "ver_agenda":
-            res = consultar_agenda_calendario()
-            return {"texto": res, "markdown": f"### Agenda Personal\n{res}"}
-
+    elif accion == "reproducir_musica":
+        query = params.get("cancion_query") or prompt_usuario
+        if channel == "nexus" and play_song:
+            res = play_song(query)
+            return {"texto": res, "markdown": f"**Spotify:** {res}"}
         else:
-            if pide_documento_largo(prompt_usuario):
-                return {"texto": resp_voz, "markdown": resp_voz}
-            breve = sintetizar_respuesta_breve(prompt_usuario, resp_voz)
-            return {"texto": breve, "markdown": breve}
+            res = buscar_y_enviar_audio(chat_id, query)
+            return {"texto": f"{resp_voz} {res}", "markdown": f"**Música:** {res}"}
 
-    except Exception as e:
-        error_msg = f"Error en procesamiento: {e}"
-        return {"texto": error_msg, "markdown": error_msg}
+    elif accion == "llamada" and params.get("telefono"):
+        msg = procesar_orden_llamada(params.get("telefono"), params.get("destinatario", "contacto"), params.get("mensaje_llamada", "Saludar"), chat_id)
+        return {"texto": msg, "markdown": msg}
+
+    elif accion == "buscar_web" and params.get("busqueda_query"):
+        crudo = buscar_en_internet(params.get("busqueda_query"))
+        breve = sintetizar_respuesta_breve(prompt_usuario, crudo)
+        return {"texto": breve, "markdown": breve}
+
+    elif accion == "crear_evento" and params.get("evento_titulo"):
+        res = crear_evento_calendario(params.get("evento_titulo"), params.get("evento_inicio"), params.get("evento_fin"))
+        return {"texto": res, "markdown": res}
+
+    elif accion == "ver_agenda":
+        res = consultar_agenda_calendario()
+        return {"texto": res, "markdown": f"### Agenda Personal\n{res}"}
+
+    else:
+        if pide_documento_largo(prompt_usuario):
+            return {"texto": resp_voz, "markdown": resp_voz}
+        breve = sintetizar_respuesta_breve(prompt_usuario, resp_voz)
+        return {"texto": breve, "markdown": breve}
 
 # ==========================================
 # 8. SÍNTESIS DE VOZ Y SERVIDOR HTTP (NEXUS + VISIÓN)
@@ -656,7 +699,7 @@ class WebServerHandler(BaseHTTPRequestHandler):
                     "reply": resultado["texto"],
                     "response": resultado["texto"],
                     "markdown": resultado.get("markdown", resultado["texto"]),
-                    "source": "Claude 3.5 Sonnet Multimodal" if image_b64 else "Jarvis Core"
+                    "source": "Multimodal Vision Pipeline" if image_b64 else "Jarvis Core"
                 }
 
                 self.send_response(200)
