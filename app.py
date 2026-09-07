@@ -56,10 +56,16 @@ claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if (anthropic and
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
 # ==========================================
-# 2. MOTOR DE VISIÓN TÁCTICA MULTIMODAL (HÍBRIDO)
+# 2. MOTOR DE VISIÓN TÁCTICA MULTIMODAL
 # ==========================================
 def procesar_vision(prompt: str, image_b64: str, system_prompt: str = None) -> dict:
-    """Procesa capturas de pantalla y gráficos mediante Claude y fallback a Groq Vision."""
+    """Procesa capturas de pantalla y gráficos mediante Claude Sonnet 5."""
+    if not claude_client:
+        return {
+            "texto": "El cliente de Anthropic no está inicializado.",
+            "markdown": "Falta ANTHROPIC_API_KEY en el entorno de Render."
+        }
+
     # Limpieza de cabeceras Base64
     if "," in image_b64:
         image_b64 = image_b64.split(",", 1)[1]
@@ -71,108 +77,59 @@ def procesar_vision(prompt: str, image_b64: str, system_prompt: str = None) -> d
         "Identifica estructura de mercado, tendencias, niveles clave de soporte/resistencia, "
         "y formula una conclusión operativa contundente."
     )
-    prompt_instruccion = prompt or "Realiza una evaluación técnica y táctica completa del gráfico o información en pantalla."
 
-    # 1. INTENTO PRINCIPAL: ANTHROPIC CLAUDE (SI ESTÁ HABILITADO)
-    if claude_client:
-       modelos_vision = [
+    user_content = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": image_b64
+            }
+        },
+        {
+            "type": "text",
+            "text": prompt or "Realiza una evaluación técnica y táctica completa del gráfico o información en pantalla."
+        }
+    ]
+
+    modelos_vision = [
         "claude-sonnet-5",
         "claude-sonnet-4-6",
         "claude-sonnet-4-5-20250929",
         "claude-haiku-4-5-20251001"
     ]
-        ]
-        for modelo in modelos_vision:
-            try:
-                print(f"[VISION CORE] Intentando con Claude: {modelo}...")
-                res = claude_client.messages.create(
-                    model=modelo,
-                    max_tokens=2500,
-                    system=sys_msg,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/jpeg",
-                                    "data": image_b64
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt_instruccion
-                            }
-                        ]
-                    }]
-                )
-                full_text = res.content[0].text
-                print(f"[VISION CORE] Análisis completado con éxito mediante Claude ({modelo}).")
 
-                lineas = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("#")]
-                resumen_voz = " ".join(lineas[:2]) if lineas else "Reconocimiento visual completado, señor."
-                if len(resumen_voz) > 300:
-                    resumen_voz = resumen_voz[:290] + "..."
+    ultimo_error = None
+    for modelo in modelos_vision:
+        try:
+            print(f"[VISION CORE] Procesando con {modelo}...")
+            res = claude_client.messages.create(
+                model=modelo,
+                max_tokens=2500,
+                system=sys_msg,
+                messages=[{"role": "user", "content": user_content}]
+            )
+            full_text = res.content[0].text
+            print(f"[VISION CORE] Análisis completado con éxito mediante {modelo}.")
 
-                return {
-                    "texto": resumen_voz,
-                    "markdown": full_text
-                }
-            except Exception as e:
-                print(f"[VISION CLAUDE ERROR con {modelo}]: {e}")
-                continue
+            lineas = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("#")]
+            resumen_voz = " ".join(lineas[:2]) if lineas else "Reconocimiento visual completado, comandante."
+            if len(resumen_voz) > 300:
+                resumen_voz = resumen_voz[:290] + "..."
 
-    # 2. RESPALDO AUTOMÁTICO: GROQ VISION (LLAMA 3.2 VISION)
-    if groq_client:
-        modelos_groq_vision = [
-            "llama-3.2-11b-vision-preview",
-            "llama-3.2-90b-vision-preview"
-        ]
-        for mod_groq in modelos_groq_vision:
-            try:
-                print(f"[VISION CORE] Activando respaldo táctico con Groq Vision: {mod_groq}...")
-                completion = groq_client.chat.completions.create(
-                    model=mod_groq,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": f"{sys_msg}\n\nInstrucción de análisis: {prompt_instruccion}"
-                                },
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/jpeg;base64,{image_b64}"
-                                    }
-                                }
-                            ]
-                        }
-                    ],
-                    temperature=0.2,
-                    max_tokens=2000
-                )
-                full_text = completion.choices[0].message.content
-                print(f"[VISION CORE] Análisis visual completado exitosamente con Groq ({mod_groq}).")
-
-                lineas = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("#")]
-                resumen_voz = " ".join(lineas[:2]) if lineas else "Reconocimiento visual completado, señor."
-                if len(resumen_voz) > 300:
-                    resumen_voz = resumen_voz[:290] + "..."
-
-                return {
-                    "texto": resumen_voz,
-                    "markdown": full_text
-                }
-            except Exception as groq_err:
-                print(f"[VISION GROQ ERROR con {mod_groq}]: {groq_err}")
-                continue
+            return {
+                "texto": resumen_voz,
+                "markdown": full_text
+            }
+        except Exception as e:
+            print(f"[VISION ERROR con {modelo}]: {e}")
+            ultimo_error = e
+            continue
 
     return {
-        "texto": "Comandante José, no fue posible establecer enlace con los motores de visión.",
-        "markdown": "Error en el pipeline visual: Ningún motor multimodal respondió con éxito."
+        "texto": f"Comandante, Claude reportó un problema: {ultimo_error}",
+        "markdown": f"Error al procesar captura visual: {ultimo_error}"
     }
 
 # ==========================================
