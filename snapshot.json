@@ -1,0 +1,38 @@
+{
+    "timestamp": 1788809984.417968,
+    "devices": [
+        {
+            "id": "eb6703a0285b96f4528eyz",
+            "ip": "192.168.1.134",
+            "uuid": "c95ee9268fa84ff4",
+            "active": 2,
+            "encrypt": true,
+            "productKey": "keynremrcjf97twe",
+            "token": true,
+            "wf_cfg": true,
+            "clientLink": 3,
+            "name": "Steren SHOME-1295",
+            "key": "7~lWZJ7P&ZuYiK{B",
+            "mac": "fc:3c:d7:b0:e8:82",
+            "ability": 0,
+            "dev_type": "default",
+            "err": "",
+            "type": "default",
+            "dps": {
+                "dps": {
+                    "20": true,
+                    "21": "white",
+                    "22": 300,
+                    "23": 0,
+                    "24": "003c03e8000a",
+                    "25": "C75F5F01000003e803e8000000005F5F01000000000000000000005F5F01007803e803e8000000005F5F01000000000000000000005F5F0100f003e803e8000000005F5F0100000000000000000000",
+                    "26": 0,
+                    "34": false,
+                    "42": "010000016432000003e8007803e800f003e8003c03e800b403e8012c03e8"
+                }
+            },
+            "origin": "broadcast",
+            "ver": "3.5"
+        }
+    ]
+}
