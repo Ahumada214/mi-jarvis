@@ -59,66 +59,79 @@ tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 # 2. MOTOR DE VISIÓN TÁCTICA MULTIMODAL
 # ==========================================
 def procesar_vision(prompt: str, image_b64: str, system_prompt: str = None) -> dict:
-    """Procesa capturas de pantalla y gráficos mediante Claude 3.5 Sonnet Multimodal."""
+    """Procesa capturas de pantalla y gráficos mediante modelos multimodales con fallback."""
     if not claude_client:
         return {
-            "texto": "El núcleo de visión táctica requiere la clave de Anthropic (Claude 3.5 Sonnet).",
+            "texto": "El núcleo de visión táctica requiere la clave de Anthropic.",
             "markdown": ""
         }
-    try:
-        # Limpieza de cabeceras Base64 si vienen presentes
-        if "," in image_b64:
-            image_b64 = image_b64.split(",", 1)[1]
-        image_b64 = image_b64.strip()
 
-        sys_msg = system_prompt or (
-            "Eres Jarvis, un analista cuantitativo y de mercados de nivel militar. "
-            "Inspecciona exhaustivamente el gráfico o captura de pantalla. "
-            "Identifica estructura de mercado, tendencias, niveles clave de soporte/resistencia, "
-            "divergencias en indicadores y formula una conclusión operativa contundente."
-        )
+    # Limpieza de cabeceras Base64 si vienen presentes
+    if "," in image_b64:
+        image_b64 = image_b64.split(",", 1)[1]
+    image_b64 = image_b64.strip()
 
-        user_content = [
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": image_b64
-                }
-            },
-            {
-                "type": "text",
-                "text": prompt or "Realiza una evaluación técnica y táctica completa del gráfico o información en pantalla."
+    sys_msg = system_prompt or (
+        "Eres Jarvis, un analista cuantitativo y de mercados táctico. "
+        "Inspecciona exhaustivamente el gráfico o captura de pantalla. "
+        "Identifica estructura de mercado, tendencias, niveles clave de soporte/resistencia, "
+        "y formula una conclusión operativa contundente."
+    )
+
+    user_content = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": image_b64
             }
-        ]
-
-        print("[VISION CORE] Despachando imagen a Claude 3.5 Sonnet...")
-        res = claude_client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=2500,
-            system=sys_msg,
-            messages=[{"role": "user", "content": user_content}]
-        )
-        full_text = res.content[0].text
-
-        # Extraer un resumen hablado conciso para el sintetizador de voz (Edge-TTS)
-        lineas = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("#")]
-        resumen_voz = " ".join(lineas[:2]) if lineas else "Reconocimiento visual completado, señor."
-        if len(resumen_voz) > 300:
-            resumen_voz = resumen_voz[:290] + "..."
-
-        return {
-            "texto": resumen_voz,
-            "markdown": full_text
+        },
+        {
+            "type": "text",
+            "text": prompt or "Realiza una evaluación técnica y táctica completa del gráfico o información en pantalla."
         }
+    ]
 
-    except Exception as e:
-        print(f"[VISION ERROR] {e}")
-        return {
-            "texto": f"Excepción en visión táctica: {e}",
-            "markdown": f"Error al procesar captura visual: {e}"
-        }
+    # Lista de candidatos válidos en orden de potencia
+    modelos_vision = [
+        "claude-3-5-sonnet-latest",
+        "claude-3-5-sonnet-20240620",
+        "claude-3-haiku-20240307"
+    ]
+
+    ultimo_error = None
+
+    for modelo in modelos_vision:
+        try:
+            print(f"[VISION CORE] Probando modelo: {modelo}...")
+            res = claude_client.messages.create(
+                model=modelo,
+                max_tokens=2500,
+                system=sys_msg,
+                messages=[{"role": "user", "content": user_content}]
+            )
+            full_text = res.content[0].text
+            print(f"[VISION CORE] Análisis completado con éxito mediante {modelo}.")
+
+            lineas = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("#")]
+            resumen_voz = " ".join(lineas[:2]) if lineas else "Reconocimiento visual completado, señor."
+            if len(resumen_voz) > 300:
+                resumen_voz = resumen_voz[:290] + "..."
+
+            return {
+                "texto": resumen_voz,
+                "markdown": full_text
+            }
+        except Exception as e:
+            print(f"[VISION ERROR con {modelo}]: {e}")
+            ultimo_error = e
+            continue
+
+    return {
+        "texto": f"Excepción en visión táctica: {ultimo_error}",
+        "markdown": f"Error al procesar captura visual: {ultimo_error}"
+    }
 
 # ==========================================
 # 3. MOTOR DE REDACCIÓN (CLAUDE / GROQ)
