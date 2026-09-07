@@ -4,6 +4,7 @@ import re
 import io
 import threading
 import httpx
+import base64
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
@@ -35,7 +36,7 @@ try:
     from obsidian_sync import save_to_obsidian
 except ImportError:
     def save_to_obsidian(title: str, content: str, tags=None) -> bool:
-        print("[OBSIDIAN] Módulo obsidian_sync no disponible.")
+        print("[OBSIDIAN] Módulo obsidian_sync no disponible localmente en la nube.")
         return False
 
 # ==========================================
@@ -55,10 +56,74 @@ claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if (anthropic and
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
 # ==========================================
-# 2. MOTOR DE REDACCIÓN (CLAUDE / GROQ)
+# 2. MOTOR DE VISIÓN TÁCTICA MULTIMODAL
+# ==========================================
+def procesar_vision(prompt: str, image_b64: str, system_prompt: str = None) -> dict:
+    """Procesa capturas de pantalla y gráficos mediante Claude 3.5 Sonnet Multimodal."""
+    if not claude_client:
+        return {
+            "texto": "El núcleo de visión táctica requiere la clave de Anthropic (Claude 3.5 Sonnet).",
+            "markdown": ""
+        }
+    try:
+        # Limpieza de cabeceras Base64 si vienen presentes
+        if "," in image_b64:
+            image_b64 = image_b64.split(",", 1)[1]
+        image_b64 = image_b64.strip()
+
+        sys_msg = system_prompt or (
+            "Eres Jarvis, un analista cuantitativo y de mercados de nivel militar. "
+            "Inspecciona exhaustivamente el gráfico o captura de pantalla. "
+            "Identifica estructura de mercado, tendencias, niveles clave de soporte/resistencia, "
+            "divergencias en indicadores y formula una conclusión operativa contundente."
+        )
+
+        user_content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": image_b64
+                }
+            },
+            {
+                "type": "text",
+                "text": prompt or "Realiza una evaluación técnica y táctica completa del gráfico o información en pantalla."
+            }
+        ]
+
+        print("[VISION CORE] Despachando imagen a Claude 3.5 Sonnet...")
+        res = claude_client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=2500,
+            system=sys_msg,
+            messages=[{"role": "user", "content": user_content}]
+        )
+        full_text = res.content[0].text
+
+        # Extraer un resumen hablado conciso para el sintetizador de voz (Edge-TTS)
+        lineas = [l.strip() for l in full_text.split("\n") if l.strip() and not l.startswith("#")]
+        resumen_voz = " ".join(lineas[:2]) if lineas else "Reconocimiento visual completado, señor."
+        if len(resumen_voz) > 300:
+            resumen_voz = resumen_voz[:290] + "..."
+
+        return {
+            "texto": resumen_voz,
+            "markdown": full_text
+        }
+
+    except Exception as e:
+        print(f"[VISION ERROR] {e}")
+        return {
+            "texto": f"Excepción en visión táctica: {e}",
+            "markdown": f"Error al procesar captura visual: {e}"
+        }
+
+# ==========================================
+# 3. MOTOR DE REDACCIÓN (CLAUDE / GROQ)
 # ==========================================
 def obtener_modelo_groq():
-    """Detecta el modelo disponible en la cuenta de Groq."""
     candidatos_validos = [
         "openai/gpt-oss-120b",
         "llama-3.1-8b-instant",
@@ -67,7 +132,7 @@ def obtener_modelo_groq():
         "mixtral-8x7b-32768"
     ]
     if not groq_client:
-        return "openai/gpt-oss-120b"
+        return "llama-3.1-8b-instant"
     try:
         modelos_remotos = groq_client.models.list()
         ids_disponibles = {m.id for m in modelos_remotos.data}
@@ -76,7 +141,7 @@ def obtener_modelo_groq():
                 return modelo
     except Exception as e:
         print(f"[GROQ MODEL LIST ERROR] {e}")
-    return "openai/gpt-oss-120b"
+    return "llama-3.1-8b-instant"
 
 ACTIVOS_FINANCIEROS = (
     "nvidia", "nvda", "apple", "aapl", "tesla", "tsla", "microsoft", "msft",
@@ -93,9 +158,7 @@ TEMAS_CONCEPTUALES = (
     "matemático", "matematica", "matemáticas", "matematicas",
 )
 
-
 def es_analisis_de_activo(tema: str, contexto: str = "") -> bool:
-    """True solo si el usuario pide análisis explícito de empresa, acción o activo."""
     texto = f"{tema} {contexto}".lower()
     es_conceptual = any(p in texto for p in TEMAS_CONCEPTUALES)
     es_activo = any(p in texto for p in ACTIVOS_FINANCIEROS)
@@ -108,15 +171,12 @@ def es_analisis_de_activo(tema: str, contexto: str = "") -> bool:
         ))
     return es_activo
 
-
 def titulo_desde_tema(tema: str) -> str:
     limpio = re.sub(r"[^\w\sáéíóúñÁÉÍÓÚÑ-]", "", tema or "").strip()
     limpio = re.sub(r"\s+", "_", limpio)[:80].strip("_")
     return limpio or "Nota_Tecnica"
 
-
 def redactar_investigacion_profunda(tema: str, contexto: str) -> str:
-    """Redacta con estructura dinámica: técnica/conceptual o análisis de activo."""
     if es_analisis_de_activo(tema, contexto):
         prompt_redaccion = f"""Eres un analista financiero sénior.
 Redacta un análisis exhaustivo sobre el activo o empresa: {tema}.
@@ -148,8 +208,6 @@ Estructura obligatoria en Markdown:
 - ## Limitaciones
 - Tags recomendados al pie
 
-PROHIBIDO incluir títulos como "Tesis de Inversión", "Valuación" o tablas de precios,
-salvo que el tema sea el análisis de un activo real (empresa, acción, bono o portafolio).
 Usa formato Markdown limpio apto para notas de Obsidian."""
 
     if claude_client:
@@ -179,12 +237,11 @@ Usa formato Markdown limpio apto para notas de Obsidian."""
     return "No hay motor de IA configurado para redactar el análisis."
 
 # ==========================================
-# 3. GENERADOR PARA OBSIDIAN (.MD) Y HTML
+# 4. GENERADOR OBSIDIAN Y DOCUMENTOS
 # ==========================================
 def formatear_para_obsidian(titulo: str, contenido_md: str) -> bytes:
     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
     tag_limpio = re.sub(r'[^a-zA-Z0-9_]', '', titulo.split()[0].lower()) if titulo else "general"
-    
     nota_obsidian = f"""---
 title: "{titulo}"
 date_created: "{fecha_actual}"
@@ -209,7 +266,7 @@ def formatear_documento_html(titulo: str, texto_contenido: str) -> bytes:
     return f"<!DOCTYPE html><html lang='es'><head><meta charset='UTF-8'><title>{titulo}</title></head><body style='font-family:sans-serif;padding:30px;line-height:1.6;background:#0f172a;color:#f8fafc;'><div style='max-width:850px;margin:auto;background:#1e293b;padding:35px;border-radius:12px;border:1px solid #334155;'><h1>{titulo}</h1>{cuerpo_html}</div></body></html>".encode('utf-8')
 
 # ==========================================
-# 4. MULTIMEDIA, CALENDAR Y BÚSQUEDA WEB
+# 5. MULTIMEDIA, CALENDAR Y BÚSQUEDA WEB
 # ==========================================
 def buscar_y_enviar_audio(chat_id, query_cancion):
     try:
@@ -256,29 +313,24 @@ def buscar_en_internet(query):
     except Exception as e:
         return f"Error en búsqueda: {e}"
 
-
 PALABRAS_REPORTE_LARGO = (
     "reporte", "análisis profundo", "analisis profundo", "tabla", "documento",
     "ensayo", "investigación", "investigacion", "análisis financiero",
     "analisis financiero",
 )
 
-
 def pide_documento_largo(prompt: str) -> bool:
     texto = (prompt or "").lower()
     return any(p in texto for p in PALABRAS_REPORTE_LARGO)
 
-
 def sintetizar_respuesta_breve(pregunta: str, contexto: str = "") -> str:
-    """Convierte datos crudos en 2-3 renglones conversacionales."""
     instrucciones = (
         "Eres Jarvis. Responde en MÁXIMO 2 o 3 renglones, conversacional, claro y al grano.\n"
-        "Prohibido pegar tablas, calendarios de toda la temporada, listados largos o textos de compra de entradas.\n"
-        'Ejemplo: "El próximo partido del Real Madrid es el sábado 6 a las 13:00 contra el Barcelona."\n\n'
+        "Prohibido tablas o textos innecesarios.\n"
         f"Pregunta: {pregunta}\n"
     )
     if contexto:
-        instrucciones += f"\nDatos de apoyo (usa solo lo indispensable):\n{contexto[:1800]}\n"
+        instrucciones += f"\nDatos de apoyo:\n{contexto[:1800]}\n"
     try:
         if claude_client:
             res = claude_client.messages.create(
@@ -346,7 +398,7 @@ def enviar_documento_telegram(chat_id, nombre_archivo, bytes_data, mime_type, ca
         return False
 
 # ==========================================
-# 5. LLAMADAS TELEFÓNICAS (BLAND.AI)
+# 6. LLAMADAS TELEFÓNICAS (BLAND.AI)
 # ==========================================
 def despachar_llamada_bland(telefono_limpio, destinatario, mensaje_objetivo, chat_id):
     if not BLAND_AI_API_KEY:
@@ -376,7 +428,6 @@ def procesar_orden_llamada(telefono, destinatario, mensaje_objetivo, chat_id):
     tel_limpio = re.sub(r'[^\d+]', '', str(telefono).strip())
     if not tel_limpio.startswith("+"):
         tel_limpio = "+52" + tel_limpio if len(tel_limpio) == 10 else "+" + tel_limpio
-
     threading.Thread(target=despachar_llamada_bland, args=(tel_limpio, destinatario, mensaje_objetivo, chat_id), daemon=True).start()
     return f"Enlazando llamada a {destinatario} ({tel_limpio}). Te enviaré el reporte cuando termine."
 
@@ -397,24 +448,15 @@ def procesar_webhook_bland(data_bytes):
         print(f"[WEBHOOK ERROR] {e}")
 
 # ==========================================
-# 6. ENRUTAMIENTO RÁPIDO (LLM)
+# 7. ENRUTAMIENTO RÁPIDO DE TEXTO (LLM)
 # ==========================================
 def procesar_con_ia(prompt_usuario, chat_id=None, channel="telegram"):
     ahora_str = datetime.now().strftime('%Y-%m-%d %H:%M')
-    system_prompt = f"""Eres Jarvis, asistente de alto rendimiento. Fecha actual: {ahora_str}.
+    system_prompt = f"""Eres Jarvis, asistente táctico de alto rendimiento. Fecha actual: {ahora_str}.
 
 Estilo de respuesta:
-- Preguntas rápidas, cotidianas o directas (partido, hora, clima, resultado, un dato):
-  usa "buscar_web" o "conversar". En "respuesta_voz" escribe SOLO la respuesta final:
-  máximo 2 o 3 renglones, conversacional y al grano.
-  Ejemplo: "El próximo partido del Real Madrid es el sábado 6 a las 13:00 contra el Barcelona."
-- NUNCA elijas "crear_doc" ni pidas tablas, calendarios de temporada ni textos de boletos
-  a menos que el usuario diga explícitamente: "reporte", "análisis profundo", "tabla" o "documento".
-
-Si el usuario pide explícitamente investigación, ensayo, reporte, análisis profundo, tabla o documento:
-- Acción: "crear_doc"
-- En "doc_titulo": Título técnico y claro (ej. "Analisis_NVIDIA_Valuacion")
-- En "doc_tema": Tema exacto que solicitó
+- Preguntas rápidas o directas: usa "buscar_web" o "conversar". En "respuesta_voz" escribe SOLO la respuesta final: máximo 2 o 3 renglones.
+- Si el usuario pide explícitamente investigación, ensayo, reporte, análisis profundo, tabla o documento: Acción: "crear_doc".
 
 Acciones disponibles: "crear_doc" | "reproducir_musica" | "llamada" | "buscar_web" | "crear_evento" | "ver_agenda" | "conversar"
 
@@ -437,7 +479,6 @@ Formato JSON obligatorio:
 }}
 """
     try:
-        # 1. Obtener decisión estructurada
         data = {}
         if claude_client:
             try:
@@ -488,12 +529,11 @@ Formato JSON obligatorio:
             try:
                 save_to_obsidian(titulo, contenido_md, tags=tags_doc)
             except Exception as e:
-                print(f"[OBSIDIAN] No se pudo subir el reporte '{titulo}': {e}")
+                print(f"[OBSIDIAN] Error al guardar: {e}")
 
             if channel == "telegram" and chat_id:
                 obsidian_bytes = formatear_para_obsidian(titulo, contenido_md)
-                enviar_documento_telegram(chat_id, f"{titulo}.md", obsidian_bytes, 'text/markdown', f"🧠 *Nota lista para Obsidian:* `{titulo}.md`")
-
+                enviar_documento_telegram(chat_id, f"{titulo}.md", obsidian_bytes, 'text/markdown', f"🧠 *Nota para Obsidian:* `{titulo}.md`")
                 html_bytes = formatear_documento_html(titulo, contenido_md)
                 enviar_documento_telegram(chat_id, f"{titulo}.html", html_bytes, 'text/html', f"📄 Documento HTML: `{titulo}.html`")
 
@@ -538,7 +578,7 @@ Formato JSON obligatorio:
         return {"texto": error_msg, "markdown": error_msg}
 
 # ==========================================
-# 7. SÍNTESIS DE VOZ Y SERVIDOR HTTP (NEXUS + WEBHOOK)
+# 8. SÍNTESIS DE VOZ Y SERVIDOR HTTP (NEXUS + VISIÓN)
 # ==========================================
 async def generar_voz(texto: str, ruta_archivo: str):
     texto_audio = texto.split("🔗")[0].strip()
@@ -585,14 +625,25 @@ class WebServerHandler(BaseHTTPRequestHandler):
                 longitud = int(self.headers.get('Content-Length', 0))
                 body = self.rfile.read(longitud).decode('utf-8')
                 data = json.loads(body)
-                prompt = data.get("prompt", "")
 
-                resultado = procesar_con_ia(prompt, channel="nexus")
+                prompt = data.get("prompt") or data.get("message") or data.get("query") or ""
+                system_prompt = data.get("system")
+                image_b64 = data.get("image_b64") or data.get("image")
+
+                # =========================================================
+                # 🚀 BIFURCACIÓN: ¿TIENE IMAGEN (VISIÓN) O ES TEXTO PLANO?
+                # =========================================================
+                if image_b64:
+                    print(f"[HTTP /ask] Petición visual recibida ({len(image_b64)} chars b64).")
+                    resultado = procesar_vision(prompt, image_b64, system_prompt=system_prompt)
+                else:
+                    resultado = procesar_con_ia(prompt, channel="nexus")
 
                 response_payload = {
+                    "reply": resultado["texto"],
                     "response": resultado["texto"],
-                    "markdown": resultado["markdown"],
-                    "source": "Jarvis Core"
+                    "markdown": resultado.get("markdown", resultado["texto"]),
+                    "source": "Claude 3.5 Sonnet Multimodal" if image_b64 else "Jarvis Core"
                 }
 
                 self.send_response(200)
@@ -600,11 +651,13 @@ class WebServerHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps(response_payload).encode('utf-8'))
+
             except Exception as e:
+                print(f"[ASK ENDPOINT ERROR] {e}")
                 self.send_response(500)
                 self.set_cors_headers()
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+                self.wfile.write(json.dumps({"error": str(e), "reply": f"Error interno: {e}"}).encode('utf-8'))
         else:
             self.send_response(404)
             self.set_cors_headers()
@@ -622,17 +675,14 @@ def iniciar_servidor():
 threading.Thread(target=iniciar_servidor, daemon=True).start()
 
 # ==========================================
-# 8. BOT DE TELEGRAM
+# 9. BOT DE TELEGRAM (VOZ, TEXTO Y FOTOS)
 # ==========================================
 TELEGRAM_MAX_CHARS = 4000
 
-
 async def enviar_texto_telegram(bot, chat_id, texto_respuesta: str):
-    """Envía el texto en bloques de 4000 caracteres para evitar 'Message is too long'."""
     mensaje = texto_respuesta or "Sin respuesta."
     for i in range(0, len(mensaje), TELEGRAM_MAX_CHARS):
         await bot.send_message(chat_id=chat_id, text=mensaje[i:i + TELEGRAM_MAX_CHARS])
-
 
 async def responder_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -642,7 +692,7 @@ async def responder_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         archivo_tg = await context.bot.get_file(update.message.voice.file_id)
         await archivo_tg.download_to_drive(audio_in)
-        
+
         if not os.path.exists(audio_in) or os.path.getsize(audio_in) < 100:
             await update.message.reply_text("No se detectó audio en la grabación.")
             return
@@ -658,12 +708,10 @@ async def responder_voz(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         resultado = procesar_con_ia(transcripcion, chat_id=chat_id, channel="telegram")
         respuesta_texto = resultado["texto"]
-        
-        await generar_voz(respuesta_texto, audio_out)
 
+        await generar_voz(respuesta_texto, audio_out)
         caption_formateado = f"📝 _{transcripcion}_\n\n🤖 {respuesta_texto}"
-        
-        # Evitar el error 'Message caption is too long' (máximo 1024 caracteres en Telegram)
+
         if len(caption_formateado) <= 1000:
             with open(audio_out, "rb") as voz:
                 await update.message.reply_voice(
@@ -695,12 +743,29 @@ async def responder_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
+async def responder_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Permite enviar capturas o fotos de gráficos directo a Telegram para análisis."""
+    chat_id = update.effective_chat.id
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        foto_obj = update.message.photo[-1]
+        archivo = await context.bot.get_file(foto_obj.file_id)
+        img_bytes = await archivo.download_as_bytearray()
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+        caption = update.message.caption or "Analiza este gráfico financiero."
+
+        resultado = procesar_vision(caption, img_b64)
+        await enviar_texto_telegram(context.bot, chat_id, f"🔍 *Análisis Visual:*\n\n{resultado['markdown']}")
+    except Exception as e:
+        await update.message.reply_text(f"Error al analizar imagen: {e}")
+
 if __name__ == "__main__":
     if not TELEGRAM_TOKEN:
         raise ValueError("Variable TELEGRAM_BOT_TOKEN faltante.")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.VOICE, responder_voz))
+    app.add_handler(MessageHandler(filters.PHOTO, responder_foto))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, responder_texto))
     print("Jarvis conectado y listo.")
     app.run_polling(drop_pending_updates=True)
