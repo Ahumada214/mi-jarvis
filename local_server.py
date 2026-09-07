@@ -235,7 +235,7 @@ def fetch_ibkr_data_sync():
     asyncio.set_event_loop(worker_loop)
     ib = IB()
     try:
-        ib.connect('127.0.0.1', 7497, clientId=99, timeout=2.5)
+        ib.connect('127.0.0.1', 7497, clientId=101, timeout=2.5)
 
         summary = ib.accountSummary()
         net_liq = 0.0
@@ -279,6 +279,7 @@ def fetch_ibkr_data_sync():
 
 
 # =====================================================================
+# =====================================================================
 # ⚡ DEMONIO PROACTIVO AUTÓNOMO (CENTINELA ESTILO IRON MAN)
 # =====================================================================
 previous_positions = {}
@@ -298,7 +299,9 @@ def iron_man_sentinel_daemon():
             current_hour = now.hour
             current_minute = now.minute
 
+            # -------------------------------------------------------------
             # 1. ANTICIPACIÓN DE AGENDA (INTERCEPCIÓN ENTRE 5 Y 25 MINUTOS)
+            # -------------------------------------------------------------
             cal_data = get_upcoming_events()
             for ev in cal_data.get("events", []):
                 ev_id = ev.get("id")
@@ -320,7 +323,9 @@ def iron_man_sentinel_daemon():
                     except Exception:
                         pass
 
+            # -------------------------------------------------------------
             # 2. VIGILANCIA PROACTIVA DEL QUANT (IBKR)
+            # -------------------------------------------------------------
             ibkr_data = fetch_ibkr_data_sync()
             if ibkr_data and ibkr_data.get("status") == "connected":
                 current_positions = {p["symbol"]: p["position"] for p in ibkr_data.get("positions", [])}
@@ -346,7 +351,9 @@ def iron_man_sentinel_daemon():
 
                     previous_positions = current_positions
 
+            # -------------------------------------------------------------
             # 3. PROTOCOLO CIRCADIANO (10:30 PM)
+            # -------------------------------------------------------------
             if current_hour == 22 and current_minute >= 30 and not circadian_notified:
                 circadian_notified = True
                 msg = "Commander José, son pasadas las veintidós treinta horas. Atenuando iluminación para mitigar fatiga visual nocturna."
@@ -356,15 +363,17 @@ def iron_man_sentinel_daemon():
             elif current_hour < 22:
                 circadian_notified = False
 
-            # 4. CENTINELA TÉRMICO DE HARDWARE (CPU > 82°C)
+            # -------------------------------------------------------------
+            # 4. CENTINELA TÉRMICO Y CARGA DE HARDWARE (CALIBRADO A 75°C / 80% CPU)
+            # -------------------------------------------------------------
             cpu_percent = psutil.cpu_percent(interval=None)
             cpu_temp = round(42.0 + (cpu_percent * 0.42), 1)
 
-            if (cpu_temp > 82.0 or cpu_percent > 92.0) and (time.time() - thermal_alert_cooldown > 300.0):
+            if (cpu_temp >= 75.0 or cpu_percent >= 80.0) and (time.time() - thermal_alert_cooldown > 180.0):
                 thermal_alert_cooldown = time.time()
-                msg = f"Comandante, advertencia de hardware: Carga del procesador al {int(cpu_percent)} por ciento. Supervisando disipación térmica."
+                msg = f"Comandante José, advertencia de hardware: Carga de procesador al {int(cpu_percent)} por ciento y temperatura en {cpu_temp} grados. Monitoreando ventilación."
                 print(f"[Jarvis Thermal Alert]: {msg}")
-                threading.Thread(target=control_leds_background, args=("preset", "yellow"), daemon=True).start()
+                threading.Thread(target=control_leds_background, args=("preset", "tactical"), daemon=True).start()
                 speak_proactive_sync(msg)
 
         except Exception as e:
@@ -373,7 +382,6 @@ def iron_man_sentinel_daemon():
         time.sleep(20)
 
 threading.Thread(target=iron_man_sentinel_daemon, daemon=True).start()
-
 
 # =====================================================================
 # 👁️ VISIÓN TÁCTICA CORREGIDA (BLINDADA CONTRA RGBA Y EXCESO DE PESO)

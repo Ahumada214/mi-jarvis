@@ -75,10 +75,12 @@ def procesar_vision(prompt: str, image_b64: str, system_prompt: str = None) -> d
 
     # 1. INTENTO PRINCIPAL: ANTHROPIC CLAUDE (SI ESTÁ HABILITADO)
     if claude_client:
-        modelos_vision = [
-            "claude-3-5-sonnet-latest",
-            "claude-3-5-sonnet-20240620",
-            "claude-3-haiku-20240307"
+       modelos_vision = [
+        "claude-sonnet-5",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5-20250929",
+        "claude-haiku-4-5-20251001"
+    ]
         ]
         for modelo in modelos_vision:
             try:
@@ -264,7 +266,7 @@ Estructura obligatoria en Markdown:
 Usa formato Markdown limpio apto para notas de Obsidian."""
 
     if claude_client:
-        for mod in ["claude-3-5-sonnet-latest", "claude-3-5-sonnet-20240620"]:
+        for mod in ["claude-sonnet-5", "claude-sonnet-4-6"]:
             try:
                 res = claude_client.messages.create(
                     model=mod,
@@ -274,7 +276,6 @@ Usa formato Markdown limpio apto para notas de Obsidian."""
                 return res.content[0].text
             except Exception as e:
                 print(f"[CLAUDE ERROR {mod}] {e}")
-
     if groq_client:
         try:
             modelo = obtener_modelo_groq()
@@ -388,7 +389,7 @@ def sintetizar_respuesta_breve(pregunta: str, contexto: str = "") -> str:
     try:
         if claude_client:
             res = claude_client.messages.create(
-                model="claude-3-5-sonnet-latest",
+                model="claude-sonnet-5",
                 max_tokens=180,
                 messages=[{"role": "user", "content": instrucciones}],
             )
